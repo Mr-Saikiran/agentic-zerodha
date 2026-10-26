@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agentic Zerodha</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Agentic Zerodha</h1>
+    <div id="auth"></div>
+  </header>
+
+  <div id="notice" class="notice" hidden></div>
+
+  <main id="app" hidden>
+    <section class="cards">
+      <div class="card"><span>Invested</span><strong id="c-invested">–</strong></div>
+      <div class="card"><span>Current value</span><strong id="c-current">–</strong></div>
+      <div class="card"><span>Total P&amp;L</span><strong id="c-pnl">–</strong></div>
+      <div class="card"><span>Available cash</span><strong id="c-cash">–</strong></div>
+    </section>
+
+    <div class="layout">
+      <section class="panel">
+        <nav class="tabs">
+          <button data-tab="holdings" class="active">Holdings</button>
+          <button data-tab="positions">Positions</button>
+          <button id="refresh" class="ghost" title="Refresh">Refresh</button>
+        </nav>
+        <div class="table-wrap"><table id="table"></table></div>
+      </section>
+
+      <section class="panel chat">
+        <div class="chat-head">
+          <h2>Ask your portfolio</h2>
+          <button id="reset" class="ghost">New chat</button>
+        </div>
+        <div id="messages" class="messages">
+          <div class="msg hint">Try: “How concentrated is my portfolio?” or “Which holdings are down the most today?”</div>
+        </div>
+        <form id="chat-form">
+          <input id="chat-input" autocomplete="off" placeholder="Ask about your holdings, positions, funds…">
+          <button type="submit">Send</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
