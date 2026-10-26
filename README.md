@@ -1,9 +1,17 @@
 # Agentic Zerodha
 
-A local web app for your Zerodha account: a portfolio dashboard plus a Claude-powered
-assistant that can read your holdings, positions, funds and live quotes.
+A local web app for your Zerodha account: a portfolio dashboard with an AI copilot built in.
 
-**Read-only for now.** The app cannot place, modify or cancel orders.
+- **Overview:** portfolio value, today's and overall P&L, allocation donut, today's movers, P&L by holding, live index ticker
+- **Copilot:** a side panel that streams answers and shows each tool call ("Reading holdings", "Searching the web"). Every table row, news story and idea has an **✦ Ask** button that hands it to the copilot
+- **News:** Claude searches the web for the past week's news on your largest holdings plus market-wide stories, tagged by sentiment and impact
+- **AI Insights:** a portfolio health score, sector allocation, strengths and risks, and ideas on where to add, trim or diversify
+
+**Read-only for now.** The app cannot place, modify or cancel orders. AI insights are not investment advice.
+
+News and Insights each run a Claude request with web search, so they cost a few cents per run. Results are cached for 30 minutes; use **Refresh** to re-run.
+
+**Preview without logging in:** set `DEMO_MODE=1` in `.env` to load sample portfolio data. The AI features still need `ANTHROPIC_API_KEY`.
 
 ## Stack
 
@@ -41,11 +49,14 @@ doesn't log you out.
 |---|---|
 | `GET /login` | Redirects to Kite login with a CSRF `state` passed via `redirect_params` |
 | `GET /callback` | Verifies `state`, exchanges `request_token` for an access token |
-| `GET /api/holdings`, `/api/positions`, `/api/funds`, `/api/quotes?instruments=NSE:INFY` | Read-only portfolio data |
-| `POST /api/chat` | Sends a message to the Claude agent (tool-use loop in `app/agent.py`) |
+| `GET /api/holdings`, `/api/positions`, `/api/funds`, `/api/market`, `/api/quotes?instruments=NSE:INFY` | Read-only portfolio and index data |
+| `POST /api/chat` | Streams the copilot's reply as Server-Sent Events (tool-use loop in `app/agent.py`) |
 | `POST /api/chat/reset` | Clears the conversation |
+| `GET /api/news?refresh=true` | News digest from Claude + web search (`app/research.py`) |
+| `GET /api/insights?refresh=true` | AI portfolio review (`app/research.py`) |
 
-The agent's tools are `get_profile`, `get_holdings`, `get_positions`, `get_funds` and `get_quotes`.
+The copilot's tools are `get_profile`, `get_holdings`, `get_positions`, `get_funds`, `get_quotes` and Claude's server-side `web_search`.
+News and Insights return structured JSON by having Claude call a strict `submit_news` / `submit_insights` tool.
 
 ## Security notes
 
@@ -56,5 +67,6 @@ The agent's tools are `get_profile`, `get_holdings`, `get_positions`, `get_funds
 ## Roadmap
 
 - [ ] Order placement with explicit per-order human approval and size/instrument limits
-- [ ] Streaming chat responses
+- [x] Streaming chat responses
 - [ ] Live prices via KiteTicker WebSocket
+- [ ] Persist chat history and insights across restarts

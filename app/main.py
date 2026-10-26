@@ -1,13 +1,16 @@
+import json
+
 import anthropic
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from kiteconnect.exceptions import KiteException
 from pydantic import BaseModel, Field
 
-from . import config
+from . import config, research
 from .agent import agent
 from .kite_client import NotLoggedIn, session
+from .research import ResearchError
 
 app = FastAPI(title="Agentic Zerodha")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
@@ -61,6 +64,7 @@ def status():
         "user": session.user,
         "missing_settings": config.missing_settings(),
         "model": config.CLAUDE_MODEL,
+        "demo": config.DEMO_MODE,
     }
 
 
@@ -95,7 +99,53 @@ def quotes(instruments: str):
     return _kite(session.quotes, items)
 
 
-# ---- Agent ----------------------------------------------------------------
+@app.get("/api/market")
+def market():
+    return _kite(session.market)
+
+
+# ---- AI: copilot, news, insights ---------------------------------------------
+
+
+def _claude_error(e: Exception) -> tuple[int, str]:
+    if isinstance(e, anthropic.AuthenticationError):
+        return 500, "Claude API credentials are missing or invalid. Set ANTHROPIC_API_KEY in .env."
+    if isinstance(e, anthropic.RateLimitError):
+        return 429, "Claude API rate limit hit. Try again shortly."
+    if isinstance(e, anthropic.APIStatusError):
+        return 502, f"Claude API error ({e.status_code}): {e.message}"
+    if isinstance(e, anthropic.APIConnectionError):
+        return 502, "Could not reach the Claude API."
+    if isinstance(e, anthropic.AnthropicError):
+        # e.g. no credentials found when the client is first created
+        return 500, f"Claude client error: {e}"
+    if isinstance(e, ResearchError):
+        return 502, str(e)
+    if isinstance(e, KiteException):
+        return 502, f"Kite API error: {e}"
+    raise e
+
+
+def _research(fn, refresh: bool):
+    if not session.is_logged_in():
+        raise NotLoggedIn()
+    try:
+        return fn(refresh)
+    except NotLoggedIn:
+        raise
+    except Exception as e:
+        status, detail = _claude_error(e)
+        raise HTTPException(status, detail)
+
+
+@app.get("/api/news")
+def news(refresh: bool = False):
+    return _research(research.news, refresh)
+
+
+@app.get("/api/insights")
+def insights(refresh: bool = False):
+    return _research(research.insights, refresh)
 
 
 class ChatRequest(BaseModel):
@@ -104,21 +154,22 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 def chat(req: ChatRequest):
+    """Streams copilot events as Server-Sent Events."""
     if not session.is_logged_in():
         raise NotLoggedIn()
-    try:
-        return agent.chat(req.message)
-    except anthropic.AuthenticationError:
-        raise HTTPException(500, "Claude API credentials are missing or invalid. Set ANTHROPIC_API_KEY in .env.")
-    except anthropic.RateLimitError:
-        raise HTTPException(429, "Claude API rate limit hit. Try again shortly.")
-    except anthropic.APIStatusError as e:
-        raise HTTPException(502, f"Claude API error ({e.status_code}): {e.message}")
-    except anthropic.APIConnectionError:
-        raise HTTPException(502, "Could not reach the Claude API.")
-    except anthropic.AnthropicError as e:
-        # e.g. no credentials found when the client is first created
-        raise HTTPException(500, f"Claude client error: {e}")
+
+    def events():
+        try:
+            for event in agent.chat_stream(req.message):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            try:
+                _, detail = _claude_error(e)
+            except Exception:
+                detail = f"Unexpected error: {e}"
+            yield f"data: {json.dumps({'type': 'error', 'message': detail})}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/api/chat/reset")

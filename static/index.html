@@ -4,50 +4,163 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agentic Zerodha</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header>
-    <h1>Agentic Zerodha</h1>
-    <div id="auth"></div>
-  </header>
-
-  <div id="notice" class="notice" hidden></div>
-
-  <main id="app" hidden>
-    <section class="cards">
-      <div class="card"><span>Invested</span><strong id="c-invested">–</strong></div>
-      <div class="card"><span>Current value</span><strong id="c-current">–</strong></div>
-      <div class="card"><span>Total P&amp;L</span><strong id="c-pnl">–</strong></div>
-      <div class="card"><span>Available cash</span><strong id="c-cash">–</strong></div>
-    </section>
-
-    <div class="layout">
-      <section class="panel">
-        <nav class="tabs">
-          <button data-tab="holdings" class="active">Holdings</button>
-          <button data-tab="positions">Positions</button>
-          <button id="refresh" class="ghost" title="Refresh">Refresh</button>
-        </nav>
-        <div class="table-wrap"><table id="table"></table></div>
-      </section>
-
-      <section class="panel chat">
-        <div class="chat-head">
-          <h2>Ask your portfolio</h2>
-          <button id="reset" class="ghost">New chat</button>
-        </div>
-        <div id="messages" class="messages">
-          <div class="msg hint">Try: “How concentrated is my portfolio?” or “Which holdings are down the most today?”</div>
-        </div>
-        <form id="chat-form">
-          <input id="chat-input" autocomplete="off" placeholder="Ask about your holdings, positions, funds…">
-          <button type="submit">Send</button>
-        </form>
-      </section>
+  <!-- Login screen -->
+  <section id="login-screen" class="login" hidden>
+    <div class="login-card">
+      <div class="brand big"><span class="logo">◆</span> Agentic&nbsp;Zerodha</div>
+      <p class="login-tag">Your portfolio, with an AI copilot that reads it, researches it and explains it.</p>
+      <ul class="login-points">
+        <li><span>✦</span> Ask anything about your holdings in plain English</li>
+        <li><span>✦</span> News digest for the stocks you actually own</li>
+        <li><span>✦</span> AI portfolio review with allocation, risks and ideas</li>
+      </ul>
+      <a class="btn primary wide" href="/login">Log in with Zerodha</a>
+      <p id="login-notice" class="login-note">Read-only access. Kite sessions expire every morning around 6&nbsp;AM&nbsp;IST.</p>
     </div>
-  </main>
+  </section>
 
+  <!-- App shell -->
+  <div id="shell" class="shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">◆</span> <span class="brand-text">Agentic&nbsp;Zerodha</span></div>
+      <nav class="nav">
+        <button data-page="overview" class="active"><span class="ico">◎</span><span>Overview</span></button>
+        <button data-page="holdings"><span class="ico">▤</span><span>Holdings</span></button>
+        <button data-page="positions"><span class="ico">⇅</span><span>Positions</span></button>
+        <button data-page="news"><span class="ico">◫</span><span>News</span></button>
+        <button data-page="insights"><span class="ico">✦</span><span>AI Insights</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="user" id="user-chip"></div>
+        <button id="logout" class="btn ghost small">Log out</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="ticker" id="ticker"></div>
+        <div class="topbar-actions">
+          <span id="demo-badge" class="badge warn" hidden>Demo data</span>
+          <button id="refresh" class="btn ghost small" title="Refresh data">↻ Refresh</button>
+          <button id="copilot-toggle" class="btn primary small">✦ Copilot</button>
+        </div>
+      </header>
+
+      <!-- Overview -->
+      <section class="page" id="page-overview">
+        <div class="hero card glow">
+          <div>
+            <div class="label">Portfolio value</div>
+            <div class="hero-value" id="ov-value">–</div>
+            <div class="hero-sub">
+              <span id="ov-day" class="pill">–</span>
+              <span class="muted">today</span>
+              <span class="dot-sep"></span>
+              <span id="ov-total" class="pill">–</span>
+              <span class="muted">overall</span>
+            </div>
+          </div>
+          <div class="hero-ai">
+            <div class="label">✦ Ask your copilot</div>
+            <div class="chips" id="hero-chips"></div>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="card kpi"><div class="label">Invested</div><div class="kpi-value" id="kpi-invested">–</div></div>
+          <div class="card kpi"><div class="label">Available cash</div><div class="kpi-value" id="kpi-cash">–</div></div>
+          <div class="card kpi"><div class="label">Holdings</div><div class="kpi-value" id="kpi-count">–</div></div>
+          <div class="card kpi"><div class="label">Largest position</div><div class="kpi-value" id="kpi-top">–</div></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3>Allocation</h3><span class="muted small">by current value</span></div>
+            <div class="donut-wrap"><canvas id="chart-alloc"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Today's movers</h3></div>
+            <div id="movers" class="movers"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Unrealised P&amp;L by holding</h3></div>
+          <div class="bar-wrap"><canvas id="chart-pnl"></canvas></div>
+        </div>
+      </section>
+
+      <!-- Holdings -->
+      <section class="page" id="page-holdings" hidden>
+        <div class="page-head">
+          <h2>Holdings</h2>
+          <input id="holdings-search" class="search" placeholder="Search symbol…">
+        </div>
+        <div class="card flush"><div class="table-wrap"><table id="holdings-table"></table></div></div>
+      </section>
+
+      <!-- Positions -->
+      <section class="page" id="page-positions" hidden>
+        <div class="page-head"><h2>Positions</h2></div>
+        <div class="card flush"><div class="table-wrap"><table id="positions-table"></table></div></div>
+      </section>
+
+      <!-- News -->
+      <section class="page" id="page-news" hidden>
+        <div class="page-head">
+          <div>
+            <h2>News for your portfolio</h2>
+            <p class="muted small" id="news-meta">Claude searches the web for the past week's news on your holdings.</p>
+          </div>
+          <button id="news-refresh" class="btn ghost small">↻ Refresh news</button>
+        </div>
+        <div id="news-body"></div>
+      </section>
+
+      <!-- Insights -->
+      <section class="page" id="page-insights" hidden>
+        <div class="page-head">
+          <div>
+            <h2>AI Insights</h2>
+            <p class="muted small" id="insights-meta">A Claude review of your allocation and risks, with ideas on where to add or trim.</p>
+          </div>
+          <button id="insights-run" class="btn primary small">✦ Generate review</button>
+        </div>
+        <div id="insights-body"></div>
+      </section>
+    </main>
+
+    <!-- Copilot -->
+    <aside class="copilot" id="copilot">
+      <header class="copilot-head">
+        <div>
+          <div class="copilot-title"><span class="spark">✦</span> Copilot</div>
+          <div class="muted small" id="model-name"></div>
+        </div>
+        <div class="copilot-actions">
+          <button id="chat-reset" class="btn ghost small" title="New chat">New chat</button>
+          <button id="copilot-close" class="btn ghost small icon" title="Close">✕</button>
+        </div>
+      </header>
+      <div class="messages" id="messages"></div>
+      <div class="suggest" id="suggest"></div>
+      <form class="composer" id="composer">
+        <textarea id="prompt" rows="1" placeholder="Ask about your portfolio, a stock, or the market…"></textarea>
+        <button class="btn primary send" type="submit" title="Send">➤</button>
+      </form>
+      <p class="fine">AI can make mistakes. Not investment advice.</p>
+    </aside>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

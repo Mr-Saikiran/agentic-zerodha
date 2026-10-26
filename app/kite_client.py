@@ -108,66 +108,133 @@ class KiteSession:
         return {k: p.get(k) for k in ("user_id", "user_name", "email", "broker", "exchanges", "products")}
 
     def holdings(self) -> list[dict]:
-        rows = self._call(self.kite.holdings)
-        out = []
-        for h in rows:
-            qty = (h.get("quantity") or 0) + (h.get("t1_quantity") or 0)
-            avg, ltp = h.get("average_price") or 0, h.get("last_price") or 0
-            out.append(
-                {
-                    "symbol": h.get("tradingsymbol"),
-                    "exchange": h.get("exchange"),
-                    "quantity": qty,
-                    "average_price": avg,
-                    "last_price": ltp,
-                    "invested": round(qty * avg, 2),
-                    "current_value": round(qty * ltp, 2),
-                    "pnl": round(h.get("pnl") or 0, 2),
-                    "day_change_pct": round(h.get("day_change_percentage") or 0, 2),
-                }
-            )
-        return out
+        return [_shape_holding(h) for h in self._call(self.kite.holdings)]
 
     def positions(self) -> list[dict]:
-        net = self._call(self.kite.positions).get("net", [])
-        return [
-            {
-                "symbol": p.get("tradingsymbol"),
-                "exchange": p.get("exchange"),
-                "product": p.get("product"),
-                "quantity": p.get("quantity"),
-                "average_price": p.get("average_price"),
-                "last_price": p.get("last_price"),
-                "pnl": round(p.get("pnl") or 0, 2),
-            }
-            for p in net
-        ]
+        return [_shape_position(p) for p in self._call(self.kite.positions).get("net", [])]
 
     def funds(self) -> dict:
-        eq = self._call(self.kite.margins).get("equity", {})
-        available = eq.get("available", {})
-        utilised = eq.get("utilised", {})
-        return {
-            "net": eq.get("net"),
-            "cash": available.get("cash"),
-            "live_balance": available.get("live_balance"),
-            "collateral": available.get("collateral"),
-            "utilised": utilised.get("debits"),
-        }
+        return _shape_funds(self._call(self.kite.margins))
 
     def quotes(self, instruments: list[str]) -> dict:
-        data = self._call(self.kite.quote, instruments)
+        return {key: _shape_quote(q) for key, q in self._call(self.kite.quote, instruments).items()}
+
+    def market(self) -> list[dict]:
+        data = self._call(self.kite.quote, [i for _, i in INDICES])
+        return [{"name": name, **_shape_quote(data[i])} for name, i in INDICES if i in data]
+
+
+INDICES = [
+    ("NIFTY 50", "NSE:NIFTY 50"),
+    ("SENSEX", "BSE:SENSEX"),
+    ("BANK NIFTY", "NSE:NIFTY BANK"),
+    ("NIFTY IT", "NSE:NIFTY IT"),
+    ("INDIA VIX", "NSE:INDIA VIX"),
+]
+
+
+def _shape_holding(h: dict) -> dict:
+    qty = (h.get("quantity") or 0) + (h.get("t1_quantity") or 0)
+    avg, ltp = h.get("average_price") or 0, h.get("last_price") or 0
+    return {
+        "symbol": h.get("tradingsymbol"),
+        "exchange": h.get("exchange"),
+        "quantity": qty,
+        "average_price": avg,
+        "last_price": ltp,
+        "invested": round(qty * avg, 2),
+        "current_value": round(qty * ltp, 2),
+        "pnl": round(h.get("pnl") or 0, 2),
+        "day_change": round(qty * (h.get("day_change") or 0), 2),
+        "day_change_pct": round(h.get("day_change_percentage") or 0, 2),
+    }
+
+
+def _shape_position(p: dict) -> dict:
+    return {
+        "symbol": p.get("tradingsymbol"),
+        "exchange": p.get("exchange"),
+        "product": p.get("product"),
+        "quantity": p.get("quantity"),
+        "average_price": p.get("average_price"),
+        "last_price": p.get("last_price"),
+        "pnl": round(p.get("pnl") or 0, 2),
+    }
+
+
+def _shape_funds(margins: dict) -> dict:
+    eq = margins.get("equity", {})
+    available = eq.get("available", {})
+    return {
+        "net": eq.get("net"),
+        "cash": available.get("cash"),
+        "live_balance": available.get("live_balance"),
+        "collateral": available.get("collateral"),
+        "utilised": eq.get("utilised", {}).get("debits"),
+    }
+
+
+def _shape_quote(q: dict) -> dict:
+    close = (q.get("ohlc") or {}).get("close")
+    change = q.get("net_change") or ((q.get("last_price") or 0) - close if close else 0)
+    return {
+        "last_price": q.get("last_price"),
+        "change": round(change, 2),
+        "change_pct": round(change / close * 100, 2) if close else None,
+        "ohlc": q.get("ohlc"),
+        "volume": q.get("volume"),
+    }
+
+
+class DemoSession:
+    """Sample data for previewing the UI without a Zerodha login (DEMO_MODE=1)."""
+
+    user = {"user_id": "DEMO01", "user_name": "Demo Investor", "email": None, "broker": "ZERODHA"}
+
+    def login_url(self) -> str:
+        return "/"
+
+    def complete_login(self, request_token: str, state: str | None) -> dict:
+        return self.user
+
+    def logout(self) -> None:
+        pass
+
+    def is_logged_in(self) -> bool:
+        return True
+
+    def profile(self) -> dict:
+        return {**self.user, "exchanges": ["NSE", "BSE"], "products": ["CNC", "MIS"]}
+
+    def holdings(self) -> list[dict]:
+        from .demo import HOLDINGS
+
+        return [_shape_holding(h) for h in HOLDINGS]
+
+    def positions(self) -> list[dict]:
+        from .demo import POSITIONS
+
+        return [_shape_position(p) for p in POSITIONS]
+
+    def funds(self) -> dict:
+        from .demo import MARGINS
+
+        return _shape_funds(MARGINS)
+
+    def quotes(self, instruments: list[str]) -> dict:
+        from .demo import HOLDINGS
+
+        by_symbol = {f"{h['exchange']}:{h['tradingsymbol']}": h for h in HOLDINGS}
         return {
-            key: {
-                "last_price": q.get("last_price"),
-                "change_pct": round(q.get("net_change") / q["ohlc"]["close"] * 100, 2)
-                if q.get("ohlc", {}).get("close")
-                else None,
-                "ohlc": q.get("ohlc"),
-                "volume": q.get("volume"),
-            }
-            for key, q in data.items()
+            i: _shape_quote({"last_price": h["last_price"], "ohlc": {"close": h["close_price"]}})
+            for i in instruments
+            if (h := by_symbol.get(i))
         }
+
+    def market(self) -> list[dict]:
+        from .demo import INDEX_QUOTES
+
+        return [{"name": name, **_shape_quote(INDEX_QUOTES[i])} for name, i in INDICES if i in INDEX_QUOTES]
 
 
 def _last_token_reset() -> datetime:
@@ -176,4 +243,4 @@ def _last_token_reset() -> datetime:
     return reset if now >= reset else reset - timedelta(days=1)
 
 
-session = KiteSession()
+session = DemoSession() if config.DEMO_MODE else KiteSession()
