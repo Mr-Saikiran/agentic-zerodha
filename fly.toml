@@ -1,6 +1,6 @@
 # Fly.io config. App names are global on Fly: change `app` if this one is taken.
 app = "agentic-zerodha"
-primary_region = "bom"  # Mumbai, close to Zerodha's servers
+primary_region = "sin"  # Singapore: nearest Fly region to Zerodha (Mumbai isn't available)
 
 [build]
   dockerfile = "Dockerfile"

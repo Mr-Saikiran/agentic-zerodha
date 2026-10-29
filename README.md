@@ -67,12 +67,12 @@ techswitch.in/equity/*  → Cloudflare Worker (deploy/) → FastAPI container
 
 ### On Fly.io
 
-`fly.toml` is set up for one always-on machine in Mumbai (`bom`) with a 1 GB volume at `/data`.
+`fly.toml` is set up for one always-on machine in Singapore (`sin`) with a 1 GB volume at `/data`.
 
 ```bash
 fly auth login
 fly apps create agentic-zerodha            # pick another name if taken, and update `app` in fly.toml
-fly volumes create equity_data --region bom --size 1
+fly volumes create equity_data --region sin --size 1
 fly secrets set KITE_API_KEY=... KITE_API_SECRET=... ANTHROPIC_API_KEY=... ORIGIN_SECRET=...
 fly deploy --ha=false                       # exactly one machine
 ```
