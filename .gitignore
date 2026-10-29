@@ -16,3 +16,6 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Cloudflare Wrangler local state
+.wrangler/

@@ -1,15 +1,11 @@
-"""Kite Connect session handling and read-only portfolio helpers."""
+"""Kite Connect accounts (one per visitor, from their own API key and access token) and
+read-only portfolio helpers."""
 
-import json
-import secrets
-import threading
 from datetime import datetime, time, timedelta, timezone
 from urllib.parse import quote
 
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import TokenException
-
-from . import config
 
 IST = timezone(timedelta(hours=5, minutes=30))
 # Kite access tokens are invalidated every morning around 6 AM IST.
@@ -20,87 +16,40 @@ class NotLoggedIn(Exception):
     pass
 
 
-class KiteSession:
-    def __init__(self) -> None:
-        self.kite = KiteConnect(api_key=config.KITE_API_KEY)
-        self._lock = threading.Lock()
-        self._pending_states: set[str] = set()
-        self.user: dict | None = None
-        self._load()
+def login_url(api_key: str, state: str) -> str:
+    # Kite echoes `redirect_params` back to the redirect URL; we use it as a CSRF state.
+    return f"{KiteConnect(api_key=api_key).login_url()}&redirect_params={quote(f'state={state}')}"
 
-    # ---- login flow -------------------------------------------------------
 
-    def login_url(self) -> str:
-        # Kite echoes `redirect_params` back to the redirect URL; we use it as a CSRF state.
-        state = secrets.token_urlsafe(16)
-        with self._lock:
-            self._pending_states.add(state)
-        return f"{self.kite.login_url()}&redirect_params={quote(f'state={state}')}"
+def create_session(api_key: str, api_secret: str, request_token: str) -> tuple[str, dict]:
+    """Exchanges the request_token from Kite's redirect for an access token. Returns (token, user)."""
+    data = KiteConnect(api_key=api_key).generate_session(request_token, api_secret=api_secret)
+    user = {k: data.get(k) for k in ("user_id", "user_name", "email", "broker")}
+    return data["access_token"], user
 
-    def complete_login(self, request_token: str, state: str | None) -> dict:
-        with self._lock:
-            if not state or state not in self._pending_states:
-                raise ValueError("Invalid or missing login state; start again from /login.")
-            self._pending_states.discard(state)
-        data = self.kite.generate_session(request_token, api_secret=config.KITE_API_SECRET)
-        self.kite.set_access_token(data["access_token"])
-        self.user = {k: data.get(k) for k in ("user_id", "user_name", "email", "broker")}
-        self._save(data["access_token"])
-        return self.user
 
-    def logout(self) -> None:
-        try:
-            if self.is_logged_in():
-                self.kite.invalidate_access_token()
-        except Exception:
-            pass
-        self.kite.set_access_token(None)
-        self.user = None
-        config.SESSION_FILE.unlink(missing_ok=True)
+def token_valid(token_at: float) -> bool:
+    return token_at >= _last_token_reset().timestamp()
 
-    def is_logged_in(self) -> bool:
-        return self.kite.access_token is not None
 
-    # ---- persistence ------------------------------------------------------
+def invalidate(api_key: str, access_token: str) -> None:
+    try:
+        KiteConnect(api_key=api_key, access_token=access_token).invalidate_access_token()
+    except Exception:
+        pass
 
-    def _save(self, access_token: str) -> None:
-        config.SESSION_FILE.write_text(
-            json.dumps(
-                {
-                    "access_token": access_token,
-                    "user": self.user,
-                    "created_at": datetime.now(IST).isoformat(),
-                }
-            )
-        )
 
-    def _load(self) -> None:
-        if not config.SESSION_FILE.exists():
-            return
-        try:
-            data = json.loads(config.SESSION_FILE.read_text())
-            created = datetime.fromisoformat(data["created_at"])
-        except (ValueError, KeyError):
-            config.SESSION_FILE.unlink(missing_ok=True)
-            return
-        if created < _last_token_reset():
-            config.SESSION_FILE.unlink(missing_ok=True)
-            return
-        self.kite.set_access_token(data["access_token"])
-        self.user = data.get("user")
-
-    # ---- read-only API wrappers ---------------------------------------------
+class KiteAccount:
+    def __init__(self, api_key: str, access_token: str) -> None:
+        if not api_key or not access_token:
+            raise NotLoggedIn()
+        self.kite = KiteConnect(api_key=api_key, access_token=access_token)
 
     def _call(self, fn, *args, **kwargs):
-        if not self.is_logged_in():
-            raise NotLoggedIn()
         try:
             return fn(*args, **kwargs)
         except TokenException:
             # Token expired or revoked on Zerodha's side.
-            self.kite.set_access_token(None)
-            self.user = None
-            config.SESSION_FILE.unlink(missing_ok=True)
             raise NotLoggedIn()
 
     def profile(self) -> dict:
@@ -186,22 +135,10 @@ def _shape_quote(q: dict) -> dict:
     }
 
 
-class DemoSession:
-    """Sample data for previewing the UI without a Zerodha login (DEMO_MODE=1)."""
+class DemoAccount:
+    """Sample portfolio for the "Try with demo data" option. Not real market data."""
 
     user = {"user_id": "DEMO01", "user_name": "Demo Investor", "email": None, "broker": "ZERODHA"}
-
-    def login_url(self) -> str:
-        return "/"
-
-    def complete_login(self, request_token: str, state: str | None) -> dict:
-        return self.user
-
-    def logout(self) -> None:
-        pass
-
-    def is_logged_in(self) -> bool:
-        return True
 
     def profile(self) -> dict:
         return {**self.user, "exchanges": ["NSE", "BSE"], "products": ["CNC", "MIS"]}
@@ -242,5 +179,3 @@ def _last_token_reset() -> datetime:
     reset = datetime.combine(now.date(), TOKEN_RESET, tzinfo=IST)
     return reset if now >= reset else reset - timedelta(days=1)
 
-
-session = DemoSession() if config.DEMO_MODE else KiteSession()

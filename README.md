@@ -1,150 +1,121 @@
 # Agentic Zerodha
 
-A local web app for your Zerodha account: a portfolio dashboard with an AI copilot built in.
+An open-source web app for Zerodha investors: a portfolio dashboard with an AI copilot built in.
+Anyone can use it with **their own keys**: a Kite Connect app, plus a Gemini, Claude or other AI API key.
 
 - **Overview:** portfolio value, today's and overall P&L, allocation donut, today's movers, P&L by holding, live index ticker
-- **Copilot:** a side panel that streams answers and shows each tool call ("Reading holdings", "Searching the web"). Every table row, news story and idea has an **✦ Ask** button that hands it to the copilot
-- **News:** Claude searches the web for the past week's news on your largest holdings plus market-wide stories, tagged by sentiment and impact
+- **Copilot:** a side panel that streams answers and shows each tool call ("Reading holdings", "Searching news"). Every table row, news story and idea has an **✦ Ask** button that hands it to the copilot
+- **News:** the week's news on your largest holdings plus market-wide stories, tagged by sentiment and impact
 - **AI Insights:** a portfolio health score, sector allocation, strengths and risks, and ideas on where to add, trim or diversify
+- **Demo mode:** try everything on a sample portfolio without a Zerodha account
 
-**Read-only for now.** The app cannot place, modify or cancel orders. AI insights are not investment advice.
+**Read-only.** The app cannot place, modify or cancel orders. AI insights are not investment advice.
 
-Results of News and Insights are cached for 30 minutes; use **Refresh** to re-run.
+## Using it
 
-**Preview without logging in:** set `DEMO_MODE=1` in `.env` to load sample portfolio data. The AI features still need an AI provider key.
+1. Create a Kite Connect app at [developers.kite.trade](https://developers.kite.trade) and set its **Redirect URL**
+   to the one the app shows you (for example `https://techswitch.in/equity/callback`). Leave the Postback URL blank.
+2. Get an AI key. [Gemini](https://aistudio.google.com/apikey) has a free tier. Claude and any OpenAI-compatible
+   provider (OpenRouter, Groq, OpenCode...) also work.
+3. Open the app, paste your Kite API key and secret and your AI key, then **Log in with Zerodha**.
 
-## Stack
+Kite logs everyone out around 6 AM IST, so you'll click **Log in with Zerodha** once a day. Your keys stay saved.
 
-- **Backend:** FastAPI on `http://127.0.0.1:5000`
-- **Broker:** [Kite Connect](https://kite.trade/docs/connect/v3/) via the `kiteconnect` SDK
-- **AI:** pick a provider with one key:
-  - **Gemini** (`GEMINI_API_KEY`, free tier): `gemini-flash-latest` via Gemini's OpenAI-compatible API. News comes from Google News RSS (free, no key).
-  - **Claude** (`ANTHROPIC_API_KEY`, pay-per-use): `claude-opus-5-5` with Claude's built-in web search.
-  - **Any OpenAI-compatible API** (`LLM_PROVIDER=openai`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `COPILOT_MODEL`): OpenRouter, Groq, OpenCode, Ollama...
-- **Frontend:** plain HTML/CSS/JS in `static/`
+### Where your keys go
 
-## Setup
+- Your Kite API key and secret, Kite access token and AI key are **encrypted into an HttpOnly cookie in your
+  browser** (with the server's `SESSION_SECRET`). The server decrypts it for each of your requests and never
+  writes it to disk or logs it. Untick "Remember" to keep them only until you close the browser; **Forget my keys**
+  in Settings deletes them.
+- Whoever runs the server can technically decrypt the cookies it receives. If that's a concern, self-host it;
+  it takes a few minutes (below).
+- Chat history and research results are kept in server memory per session and are lost when the server restarts.
 
-1. **Kite developer console** (https://developers.kite.trade). Set your app's:
-   - Redirect URL: `http://127.0.0.1:5000/callback`
-   - Postback URL: leave blank
-2. **Install:**
-   ```bash
-   python -m venv .venv
-   .venv\Scripts\activate        # Windows  (macOS/Linux: source .venv/bin/activate)
-   pip install -r requirements.txt
-   ```
-3. **Configure secrets:** copy `.env.example` to `.env` and fill in `KITE_API_KEY`,
-   `KITE_API_SECRET` and `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY`). `.env` is git-ignored. Never commit it.
-4. **Run:**
-   ```bash
-   uvicorn app.main:app --host 127.0.0.1 --port 5000 --reload
-   ```
-5. Open http://127.0.0.1:5000 and click **Log in with Zerodha**.
+## AI providers
 
-Kite access tokens expire every morning around 6 AM IST, so you'll log in once a day.
-The token is cached in `.kite_session.json` (git-ignored) so restarting the server
-doesn't log you out.
+| Provider | Model (default) | News source |
+|---|---|---|
+| Google Gemini (free tier) | `gemini-flash-latest` | Google News RSS (free, no key) |
+| Anthropic Claude | `claude-opus-5-5` | Claude's built-in web search |
+| OpenAI-compatible | your choice (base URL + model) | Google News RSS |
+
+You can override the model in Settings. A custom base URL must be public `https://`; set `ALLOW_LOCAL_AI_URL=1`
+when self-hosting to use something like Ollama at `http://localhost:11434/v1`.
+
+## Run it locally
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate        # Windows  (macOS/Linux: source .venv/bin/activate)
+pip install -r requirements.txt
+cp .env.example .env          # optional: set SESSION_SECRET so restarts don't clear saved keys
+uvicorn app.main:app --host 127.0.0.1 --port 5000 --reload
+```
+
+Open http://127.0.0.1:5000. Your Kite app's Redirect URL for local use is `http://127.0.0.1:5000/callback`.
+
+## Configuration
+
+Only deployment settings; user keys are never configured on the server.
+
+| Variable | Purpose |
+|---|---|
+| `SESSION_SECRET` | Encrypts session cookies. Set a long random value in production; changing it signs everyone out |
+| `BASE_PATH` | URL prefix, e.g. `/equity` for `https://techswitch.in/equity/` |
+| `KITE_REDIRECT_URL` | Redirect URL shown to users. Default: derived from the request |
+| `ORIGIN_SECRET` | Optional. Only accept requests with this `X-Origin-Auth` header (set the same on the Cloudflare Worker) |
+| `ALLOW_LOCAL_AI_URL` | Self-hosting only: allow `http://` and private-network AI base URLs |
 
 ## How it works
 
 | Route | Purpose |
 |---|---|
-| `GET /login` | Redirects to Kite login with a CSRF `state` passed via `redirect_params` |
-| `GET /callback` | Verifies `state`, exchanges `request_token` for an access token |
-| `GET /api/holdings`, `/api/positions`, `/api/funds`, `/api/market`, `/api/quotes?instruments=NSE:INFY` | Read-only portfolio and index data |
-| `POST /api/chat` | Streams the copilot's reply as Server-Sent Events (tool-use loop in `app/agent.py`) |
-| `POST /api/chat/reset` | Clears the conversation |
-| `GET /api/news?refresh=true` | News digest from Claude + web search (`app/research.py`) |
-| `GET /api/insights?refresh=true` | AI portfolio review (`app/research.py`) |
+| `GET /api/status` | Session state: keys saved (as hints only), logged in, provider, callback URL |
+| `POST /api/setup` | Saves the user's keys into their encrypted cookie |
+| `POST /api/demo` | Starts a demo session with sample data |
+| `GET /login` | Redirects to Kite login with the user's API key and a CSRF `state` |
+| `GET /callback` | Verifies `state`, exchanges `request_token` for an access token, stores it in the cookie |
+| `POST /logout`, `POST /api/forget` | Ends the Kite session / deletes all saved keys |
+| `GET /api/holdings`, `/api/positions`, `/api/funds`, `/api/market`, `/api/quotes` | Read-only portfolio and index data |
+| `POST /api/chat` | Streams the copilot's reply as Server-Sent Events (`app/agent.py`) |
+| `GET /api/news`, `/api/insights` | Background research jobs the UI polls (`app/research.py`) |
 
-The copilot's tools are `get_profile`, `get_holdings`, `get_positions`, `get_funds`, `get_quotes` and Claude's server-side `web_search`.
-News and Insights return structured JSON by having Claude call a strict `submit_news` / `submit_insights` tool.
+POST requests must carry `X-Requested-With: fetch` (the page's own fetch calls do), so other sites can't use a
+visitor's cookie.
 
-## Deploying to techswitch.in/equity
+## Deploying (example: techswitch.in/equity on Render)
 
 ```
 techswitch.in/*         → existing static site (unchanged)
-techswitch.in/equity/*  → Cloudflare Worker (deploy/) → FastAPI container
+techswitch.in/equity/*  → Cloudflare Worker (deploy/) → FastAPI container on Render
 ```
 
-### On Render (free)
-
-`render.yaml` is a Blueprint for a free Docker web service in Singapore.
-
-1. Render dashboard → **New → Blueprint** → connect `Mr-Saikiran/agentic-zerodha`.
-2. Render asks for `KITE_API_KEY`, `KITE_API_SECRET` and `GEMINI_API_KEY`; enter them there. It generates
-   `ORIGIN_SECRET` itself: open the service → **Environment** and copy that value for the Worker.
-3. After the first deploy, `https://agentic-zerodha.onrender.com/` returns `{"ok":true,...}` and `/equity/`
-   returns 403 (no secret), as it should. If Render gave the service a different URL, put it in
-   `ORIGIN_URL` in `deploy/wrangler.toml`.
-4. Deploy the Worker (step 3 under "Any host"). Its cron trigger pings `/healthz` every 10 minutes during
-   market hours so the free service doesn't sleep.
-
-Free-plan limits: no persistent disk and a sleep after 15 idle minutes, so a sleep or redeploy logs you out
-of Kite and clears the chat (you log in daily anyway; Kite tokens expire around 6 AM). The first request
-after a sleep takes about a minute.
-
-### On Fly.io
-
-`fly.toml` is set up for one always-on machine in Singapore (`sin`) with a 1 GB volume at `/data`.
-
-```bash
-fly auth login
-fly apps create agentic-zerodha            # pick another name if taken, and update `app` in fly.toml
-fly volumes create equity_data --region sin --size 1
-fly secrets set KITE_API_KEY=... KITE_API_SECRET=... GEMINI_API_KEY=... ORIGIN_SECRET=...
-fly deploy --ha=false                       # exactly one machine
-```
-
-Check it: `curl https://agentic-zerodha.fly.dev/healthz` returns `{"ok":true}`, and
-`https://agentic-zerodha.fly.dev/equity/` returns 403 (no secret), as it should. Then set
-`ORIGIN_URL = "https://agentic-zerodha.fly.dev"` in `deploy/wrangler.toml` and continue from step 2 below.
-Logs: `fly logs`.
-
-### Any host
-
-1. **Run the container** on an always-on host (Render, Railway, Fly.io or a VM). Run exactly **one instance**:
-   the Kite session, chat history and research jobs live in memory. Mount a volume at `/data` to keep the
-   Kite token across restarts. Set these environment variables:
-
-   | Variable | Value |
-   |---|---|
-   | `BASE_PATH` | `/equity` |
-   | `KITE_API_KEY`, `KITE_API_SECRET` | from your **production** Kite app |
-   | `KITE_REDIRECT_URL` | `https://techswitch.in/equity/callback` |
-   | `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY`) | your AI provider key |
-   | `ORIGIN_SECRET` | a long random string, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
-
-   Health check path: `/healthz` (it doesn't need the secret).
-2. **Kite developer console:** create a second Kite app for production with Redirect URL
-   `https://techswitch.in/equity/callback`. Keep the first one for local development at `127.0.0.1:5000`.
-3. **Cloudflare Worker:** edit `ORIGIN_URL` in `deploy/wrangler.toml`, then from `deploy/`:
+1. **Render:** dashboard → **New → Blueprint** → this repo. `render.yaml` creates a free Docker web service in
+   Singapore with `BASE_PATH=/equity` and a generated `SESSION_SECRET`. No API keys are needed.
+2. **Cloudflare Worker:** set `ORIGIN_URL` in `deploy/wrangler.toml` to the Render URL, then from `deploy/`:
    ```bash
-   npx wrangler secret put ORIGIN_SECRET
    npx wrangler deploy
    ```
-   If techswitch.in is attached to a Worker as a *Custom Domain*, routes don't run before it. In that case add
-   this forwarding logic to the site's own Worker for paths starting with `/equity` instead.
-4. **Cloudflare Access (required):** Zero Trust → Access → Applications → Self-hosted, domain `techswitch.in`,
-   path `equity`, policy *Allow* → *Emails* → your email only. Without this, anyone who opens the URL sees your
-   portfolio and spends your Claude credits.
+   Its cron trigger pings `/healthz` every 10 minutes during market hours so the free service doesn't sleep.
+   If techswitch.in is attached to a Worker as a *Custom Domain*, routes don't run before it; add this forwarding
+   to the site's own Worker for paths starting with `/equity` instead.
+3. Open `https://techswitch.in/equity/`.
 
-To test the path prefix locally: `BASE_PATH=/equity uvicorn app.main:app --port 5000`, then open
-http://127.0.0.1:5000/equity/.
+Render's free plan sleeps after 15 idle minutes (the next visit takes about a minute) and has no disk. Saved keys
+and Kite logins survive that, because they're in the visitor's cookie; open chats don't.
+
+`Dockerfile` runs anywhere (Fly.io, Railway, a VM): one worker, port from `$PORT`. `fly.toml` is an example for Fly.io.
 
 ## Security notes
 
-- The app has no login of its own. When it's on the internet, Cloudflare Access is what keeps it private.
-- With `ORIGIN_SECRET` set, the container refuses any request that didn't come through the Worker.
-
-- The server binds to `127.0.0.1` only. Don't expose it publicly without adding authentication.
-- `KITE_API_SECRET` stays server-side. If it ever leaks, regenerate it in the Kite console.
-- Automating the Zerodha login (storing your password or TOTP) violates Zerodha's terms. Log in through the browser.
+- Treat the server as trusted with users' keys while their requests are in flight; self-host for full control.
+- Automating the Zerodha login (storing passwords or TOTP) violates Zerodha's terms. Users log in through Kite's own page.
+- If a Kite API secret ever leaks, regenerate it in the Kite developer console.
 
 ## Roadmap
 
 - [ ] Order placement with explicit per-order human approval and size/instrument limits
 - [x] Streaming chat responses
+- [x] Bring-your-own-keys, multi-user
 - [ ] Live prices via KiteTicker WebSocket
-- [ ] Persist chat history and insights across restarts
+- [ ] Persist chat history across restarts

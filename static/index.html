@@ -10,18 +10,60 @@
   <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
-  <!-- Login screen -->
+  <!-- Login / setup screen: every visitor brings their own Kite and AI keys -->
   <section id="login-screen" class="login" hidden>
     <div class="login-card">
       <div class="brand big"><span class="logo">◆</span> Agentic&nbsp;Zerodha</div>
-      <p class="login-tag">Your portfolio, with an AI copilot that reads it, researches it and explains it.</p>
-      <ul class="login-points">
-        <li><span>✦</span> Ask anything about your holdings in plain English</li>
-        <li><span>✦</span> News digest for the stocks you actually own</li>
-        <li><span>✦</span> AI portfolio review with allocation, risks and ideas</li>
-      </ul>
-      <a class="btn primary wide" href="login">Log in with Zerodha</a>
-      <p id="login-notice" class="login-note">Read-only access. Kite sessions expire every morning around 6&nbsp;AM&nbsp;IST.</p>
+      <p class="login-tag">Your Zerodha portfolio, with an AI copilot that reads it, researches it and explains it.</p>
+
+      <!-- Keys saved: one click to log in -->
+      <div id="login-ready" hidden>
+        <ul class="login-points" id="saved-summary"></ul>
+        <a class="btn primary wide" href="login">Log in with Zerodha</a>
+        <div class="row-btns">
+          <button class="btn ghost" type="button" id="edit-keys">Change keys</button>
+          <button class="btn ghost" type="button" data-demo>Try demo data</button>
+        </div>
+      </div>
+
+      <!-- Key setup -->
+      <form id="setup-form" class="setup" hidden autocomplete="off">
+        <div class="step">
+          <span class="step-n">1</span>
+          <div class="step-body">
+            <h3>Your Kite Connect app</h3>
+            <p class="muted small">Create an app at <a href="https://developers.kite.trade" target="_blank" rel="noopener">developers.kite.trade</a>
+              and set its <b>Redirect URL</b> to:</p>
+            <div class="copy-row"><code id="callback-url"></code><button type="button" class="btn ghost small" id="copy-callback">Copy</button></div>
+            <label>API key<input id="f-kite-key" spellcheck="false" autocapitalize="off"></label>
+            <label>API secret<input id="f-kite-secret" type="password" spellcheck="false"></label>
+          </div>
+        </div>
+        <div class="step">
+          <span class="step-n">2</span>
+          <div class="step-body">
+            <h3>AI provider</h3>
+            <label>Provider<select id="f-provider"></select></label>
+            <label><span>API key <a id="ai-key-link" class="small" target="_blank" rel="noopener" hidden>Get a free key ↗</a></span>
+              <input id="f-ai-key" type="password" spellcheck="false"></label>
+            <label id="base-url-field" hidden>API base URL<input id="f-base-url" spellcheck="false" placeholder="https://openrouter.ai/api/v1"></label>
+            <label><span>Model <span class="muted small">optional</span></span><input id="f-model" spellcheck="false"></label>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="f-remember" checked> Remember these keys on this device for 30 days</label>
+        <p id="setup-error" class="form-error" hidden></p>
+        <button class="btn primary wide" type="submit" id="setup-submit">Save and log in with Zerodha</button>
+        <div class="row-btns">
+          <button class="btn ghost" type="button" data-demo>Try demo data</button>
+          <button class="btn ghost" type="button" id="back-to-app" hidden>Back to the app</button>
+          <button class="btn ghost danger" type="button" id="forget-keys" hidden>Forget my keys</button>
+        </div>
+        <p class="login-note">Your keys are encrypted into a cookie in this browser and sent only with your own requests.
+          The server never stores them. Read-only: the app can't place orders.
+          <a href="https://github.com/Mr-Saikiran/agentic-zerodha" target="_blank" rel="noopener">Open source</a>, so you can self-host it too.</p>
+      </form>
+
+      <p id="login-notice" class="login-note">Kite sessions expire every morning around 6&nbsp;AM&nbsp;IST.</p>
     </div>
   </section>
 
@@ -38,6 +80,7 @@
       </nav>
       <div class="sidebar-foot">
         <div class="user" id="user-chip"></div>
+        <button id="settings" class="btn ghost small" title="Keys and AI provider">⚙ Settings</button>
         <button id="logout" class="btn ghost small">Log out</button>
       </div>
     </aside>

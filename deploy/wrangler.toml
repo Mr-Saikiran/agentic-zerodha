@@ -18,5 +18,5 @@ crons = ["*/10 2-11 * * 1-5"]
 # Public URL of the FastAPI container (Render, Railway, Fly.io, a VM...)
 ORIGIN_URL = "https://agentic-zerodha.onrender.com"
 
-# Set the shared secret with:  npx wrangler secret put ORIGIN_SECRET
-# It must equal ORIGIN_SECRET in the app's environment.
+# Optional origin lock: set the same value here and as ORIGIN_SECRET on the app with
+#   npx wrangler secret put ORIGIN_SECRET

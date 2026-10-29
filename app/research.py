@@ -11,8 +11,7 @@ import time
 
 import openai
 
-from . import config, llm, news_feed
-from .kite_client import session
+from . import llm, news_feed
 
 CACHE_TTL = 30 * 60
 MAX_STEPS = 8
@@ -119,11 +118,11 @@ This is analysis for the investor's own research, not a SEBI-registered recommen
 When done, call submit_insights."""
 
 
-def _run(prompt: str, tool: dict, web_uses: int, effort: str) -> dict:
+def _run(prompt: str, tool: dict, web_uses: int, effort: str, ai: llm.AI) -> dict:
     messages: list = [{"role": "user", "content": prompt}]
     for _ in range(MAX_STEPS):
-        with llm.client().beta.messages.stream(
-            **llm.COMMON,
+        with ai.anthropic_client().beta.messages.stream(
+            **ai.claude_common(),
             max_tokens=32000,
             tools=[llm.web_search_tool(web_uses), tool],
             messages=messages,
@@ -136,7 +135,7 @@ def _run(prompt: str, tool: dict, web_uses: int, effort: str) -> dict:
                 return block.input
 
         if response.stop_reason == "refusal":
-            raise ResearchError("Claude declined this request.")
+            raise ResearchError("The AI declined this request.")
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason == "pause_turn":
             continue
@@ -201,24 +200,24 @@ def _parse_json(text: str) -> dict:
         raise ResearchError("The model didn't return valid JSON. Try again.")
 
 
-def _openai_json(prompt: str, name: str, schema: dict) -> dict:
-    client = llm.openai_client()
+def _openai_json(prompt: str, name: str, schema: dict, ai: llm.AI) -> dict:
+    client = ai.openai_client()
     messages = [{"role": "user", "content": prompt}]
     try:
         response = client.chat.completions.create(
-            model=config.OPENAI_MODEL,
+            model=ai.model,
             messages=messages,
             response_format={"type": "json_schema", "json_schema": {"name": name, "schema": schema, "strict": True}},
         )
     except openai.BadRequestError:
         # Some providers don't accept json_schema; the schema is also in the prompt.
         response = client.chat.completions.create(
-            model=config.OPENAI_MODEL, messages=messages, response_format={"type": "json_object"}
+            model=ai.model, messages=messages, response_format={"type": "json_object"}
         )
     return _parse_json(response.choices[0].message.content or "")
 
 
-def _feed_news(holdings: list[dict]) -> dict:
+def _feed_news(holdings: list[dict], ai: llm.AI) -> dict:
     symbols = _top_symbols(holdings, 10)
     articles = news_feed.portfolio_news(symbols)
     if not articles:
@@ -230,7 +229,7 @@ def _feed_news(holdings: list[dict]) -> dict:
         articles=json.dumps(brief, ensure_ascii=False),
         schema=json.dumps(FEED_NEWS_TOOL_SCHEMA),
     )
-    result = _openai_json(prompt, "news_digest", FEED_NEWS_TOOL_SCHEMA)
+    result = _openai_json(prompt, "news_digest", FEED_NEWS_TOOL_SCHEMA, ai)
     by_id = {a["id"]: a for a in articles}
     items = []
     for item in result.get("items", []):
@@ -245,7 +244,7 @@ def _feed_news(holdings: list[dict]) -> dict:
     return {"market_summary": result.get("market_summary", ""), "items": items}
 
 
-def _feed_insights(prompt: str, holdings: list[dict]) -> dict:
+def _feed_insights(prompt: str, holdings: list[dict], ai: llm.AI) -> dict:
     headlines = [
         {k: a[k] for k in ("title", "source", "published", "symbol")}
         for a in news_feed.portfolio_news(_top_symbols(holdings, 6), per_symbol=3)
@@ -258,65 +257,59 @@ def _feed_insights(prompt: str, holdings: list[dict]) -> dict:
         + f"\nRecent headlines:\n{json.dumps(headlines, ensure_ascii=False)}\n\n"
         + f"Reply with JSON only, matching this JSON schema:\n{json.dumps(INSIGHTS_TOOL['input_schema'])}"
     )
-    return _openai_json(prompt, "portfolio_review", INSIGHTS_TOOL["input_schema"])
+    return _openai_json(prompt, "portfolio_review", INSIGHTS_TOOL["input_schema"], ai)
 
 
-def _build_news() -> dict:
-    holdings = session.holdings()
-    if not llm.use_anthropic():
-        return _feed_news(holdings)
+def _build_news(account, ai: llm.AI) -> dict:
+    holdings = account.holdings()
+    if not ai.use_anthropic:
+        return _feed_news(holdings, ai)
     top = sorted(holdings, key=lambda h: h["current_value"], reverse=True)[:12]
     brief = "\n".join(f"- {h['symbol']} ({h['exchange']})" for h in top) or "- (no holdings)"
-    return _run(NEWS_PROMPT.format(today=llm.today(), holdings=brief), NEWS_TOOL, web_uses=8, effort="low")
+    return _run(NEWS_PROMPT.format(today=llm.today(), holdings=brief), NEWS_TOOL, 8, "low", ai)
 
 
-def _build_insights() -> dict:
-    holdings = session.holdings()
+def _build_insights(account, ai: llm.AI) -> dict:
+    holdings = account.holdings()
     prompt = INSIGHTS_PROMPT.format(
         today=llm.today(),
         holdings=_holdings_table(holdings),
-        funds=json.dumps(session.funds(), default=str),
+        funds=json.dumps(account.funds(), default=str),
     )
-    if not llm.use_anthropic():
-        return _feed_insights(prompt, holdings)
-    return _run(prompt, INSIGHTS_TOOL, web_uses=5, effort="high")
+    if not ai.use_anthropic:
+        return _feed_insights(prompt, holdings, ai)
+    return _run(prompt, INSIGHTS_TOOL, 5, "high", ai)
 
 
 BUILDERS = {"news": _build_news, "insights": _build_insights}
 
 # Research runs in a background thread and the UI polls, so no single HTTP request outlives
-# a proxy timeout (Cloudflare drops requests idle for ~100s).
-_jobs: dict[str, dict] = {}
-_jobs_lock = threading.Lock()
+# a proxy timeout (Cloudflare drops requests idle for ~100s). Jobs live in the visitor's session state.
 
 
-def _work(key: str) -> None:
+def _work(st, key: str, account, ai: llm.AI) -> None:
     try:
-        result = BUILDERS[key]()
+        result = BUILDERS[key](account, ai)
         job = {"status": "ready", "result": {**result, "generated_at": time.time()}, "finished_at": time.time()}
     except Exception as e:
         job = {"status": "error", "error": e}
-    with _jobs_lock:
-        _jobs[key] = job
+    with st.jobs_lock:
+        st.jobs[key] = job
 
 
-def get(key: str, refresh: bool = False) -> dict:
-    """Returns {"status": "ready", ...result} or {"status": "running"}; re-raises a failed job's error once."""
-    with _jobs_lock:
-        job = _jobs.get(key)
+def get(st, key: str, refresh: bool, account, ai: llm.AI) -> dict:
+    """Returns {"status": "ready", ...result} or {"status": "running"}; re-raises a failed job's error once.
+    `st` is the visitor's session state (sessions.state)."""
+    with st.jobs_lock:
+        job = st.jobs.get(key)
         if job and job["status"] == "running":
             return {"status": "running", "started_at": job["started_at"]}
         if job and job["status"] == "error" and not refresh:
-            del _jobs[key]
+            del st.jobs[key]
             raise job["error"]
         if job and job["status"] == "ready" and not refresh and time.time() - job["finished_at"] < CACHE_TTL:
             return {"status": "ready", **job["result"]}
         started_at = time.time()
-        _jobs[key] = {"status": "running", "started_at": started_at}
-    threading.Thread(target=_work, args=(key,), daemon=True).start()
+        st.jobs[key] = {"status": "running", "started_at": started_at}
+    threading.Thread(target=_work, args=(st, key, account, ai), daemon=True).start()
     return {"status": "running", "started_at": started_at}
-
-
-def reset() -> None:
-    with _jobs_lock:
-        _jobs.clear()

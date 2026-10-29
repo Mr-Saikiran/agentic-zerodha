@@ -413,3 +413,33 @@ tbody tr:last-child td { border-bottom: 0; }
   .search { min-width: 0; width: 100%; }
   #demo-badge, #refresh { display: none !important; }
 }
+
+/* ---- key setup ---- */
+.login-card:has(.setup:not([hidden])) { max-width: 560px; }
+.setup { display: flex; flex-direction: column; gap: 16px; }
+.step { display: flex; gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); }
+.step-n {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--grad); color: #fff; font-weight: 700; font-size: 13px;
+}
+.step-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.step-body h3 { font-size: 15px; }
+.step-body p { margin: 0; }
+.setup label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
+.setup label > span { display: flex; justify-content: space-between; gap: 8px; }
+.setup input:not([type="checkbox"]), .setup select {
+  font: inherit; font-weight: 400; padding: 9px 12px; border-radius: 10px; width: 100%;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.setup input:focus, .setup select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.setup label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; color: var(--muted); }
+.copy-row { display: flex; gap: 8px; align-items: center; }
+.copy-row code {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-family: "JetBrains Mono", monospace; font-size: 12px;
+  padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px dashed var(--border);
+}
+.form-error { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--down-soft); color: var(--down); font-size: 13px; }
+.row-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 10px; }
+.row-btns .btn { flex: 1; min-width: 140px; }
+.btn.danger { color: var(--down); }
+#login-ready .login-points { margin-bottom: 18px; }

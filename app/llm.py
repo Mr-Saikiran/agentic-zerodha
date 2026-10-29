@@ -1,5 +1,7 @@
-"""Shared AI clients and request settings (Claude, or Gemini/other OpenAI-compatible APIs)."""
+"""AI provider clients, built per visitor from the provider and key in their session."""
 
+import hashlib
+import threading
 from datetime import datetime, timedelta, timezone
 
 import anthropic
@@ -9,40 +11,61 @@ from . import config
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-_client: anthropic.Anthropic | None = None
-_openai_client: openai.OpenAI | None = None
+# Clients keep HTTP connections open, so reuse them per (provider, key, base_url).
+_clients: dict[str, object] = {}
+_clients_lock = threading.Lock()
+MAX_CLIENTS = 200
 
 
-def client() -> anthropic.Anthropic:
-    # Created lazily so the dashboard works even before Claude credentials are configured.
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic()
-    return _client
+class NoAIKey(Exception):
+    pass
 
 
-def openai_client() -> openai.OpenAI:
-    """Client for Gemini or any OpenAI-compatible provider (LLM_PROVIDER != "anthropic")."""
-    global _openai_client
-    if _openai_client is None:
-        if not config.OPENAI_API_KEY:
-            key = "GEMINI_API_KEY" if config.LLM_PROVIDER == "gemini" else "OPENAI_API_KEY"
-            raise openai.OpenAIError(f"{key} is not set.")
-        _openai_client = openai.OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL)
-    return _openai_client
+class AI:
+    def __init__(self, provider: str, api_key: str, model: str = "", base_url: str = "") -> None:
+        if not provider or not api_key:
+            raise NoAIKey()
+        preset = config.PROVIDERS.get(provider, config.PROVIDERS["openai"])
+        self.provider = provider
+        self.api_key = api_key
+        self.model = model or preset["model"]
+        self.base_url = base_url or preset["base_url"]
+        if not self.model:
+            raise NoAIKey()
 
+    @property
+    def name(self) -> str:
+        return {"gemini": "Gemini", "anthropic": "Claude"}.get(self.provider, "AI provider")
 
-def use_anthropic() -> bool:
-    return config.LLM_PROVIDER == "anthropic"
+    @property
+    def use_anthropic(self) -> bool:
+        return self.provider == "anthropic"
 
+    def _cached(self, factory):
+        key = hashlib.sha256(f"{self.provider}|{self.api_key}|{self.base_url}".encode()).hexdigest()
+        with _clients_lock:
+            if key not in _clients:
+                if len(_clients) >= MAX_CLIENTS:
+                    _clients.pop(next(iter(_clients)))
+                _clients[key] = factory()
+            return _clients[key]
 
-# Applied to every request: on a safety-classifier decline the API retries on a suitable fallback model.
-COMMON = {
-    "model": config.CLAUDE_MODEL,
-    "thinking": {"type": "adaptive"},
-    "betas": ["server-side-fallback-2026-07-01"],
-    "fallbacks": "default",
-}
+    def anthropic_client(self) -> anthropic.Anthropic:
+        return self._cached(lambda: anthropic.Anthropic(api_key=self.api_key))
+
+    def openai_client(self) -> openai.OpenAI:
+        if not self.base_url:
+            raise openai.OpenAIError("Set the API base URL for your OpenAI-compatible provider.")
+        return self._cached(lambda: openai.OpenAI(api_key=self.api_key, base_url=self.base_url))
+
+    def claude_common(self) -> dict:
+        # On a safety-classifier decline the API retries on a suitable fallback model.
+        return {
+            "model": self.model,
+            "thinking": {"type": "adaptive"},
+            "betas": ["server-side-fallback-2026-07-01"],
+            "fallbacks": "default",
+        }
 
 
 def web_search_tool(max_uses: int) -> dict:

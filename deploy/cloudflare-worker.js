@@ -1,5 +1,5 @@
-// Forwards techswitch.in/equity/* to the FastAPI origin and adds the shared origin secret.
-// The rest of techswitch.in is untouched. Cloudflare Access should protect /equity* in front of this.
+// Forwards techswitch.in/equity/* to the FastAPI origin. The rest of techswitch.in is untouched.
+// If ORIGIN_SECRET is set (here and on the app), the origin only accepts requests that came through here.
 
 export default {
   async fetch(request, env) {
@@ -7,7 +7,7 @@ export default {
     const target = new URL(url.pathname + url.search, env.ORIGIN_URL);
 
     const headers = new Headers(request.headers);
-    headers.set("X-Origin-Auth", env.ORIGIN_SECRET);
+    if (env.ORIGIN_SECRET) headers.set("X-Origin-Auth", env.ORIGIN_SECRET);
     headers.set("X-Forwarded-Host", url.host);
     headers.set("X-Forwarded-Proto", "https");
 
@@ -20,8 +20,8 @@ export default {
     });
   },
 
-  // Cron trigger (see wrangler.toml): pings the origin so Render's free plan doesn't put it to sleep,
-  // which would drop the in-memory Kite session.
+  // Cron trigger (see wrangler.toml): pings the origin so Render's free plan doesn't put it to sleep
+  // (a cold start takes about a minute, and in-memory chat history is lost).
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(fetch(new URL("/healthz", env.ORIGIN_URL)));
   },

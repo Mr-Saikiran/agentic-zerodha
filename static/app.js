@@ -20,7 +20,8 @@ const ago = (ts) => {
 // ---- API --------------------------------------------------------------------
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  // X-Requested-With: the server rejects POSTs without it (CSRF protection for the session cookie).
+  const res = await fetch(path, { headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" }, ...opts });
   const body = await res.json().catch(() => ({}));
   if (res.status === 401) {
     showLogin();
@@ -44,33 +45,141 @@ const state = {
   modelName: "AI",
 };
 
-// ---- auth / shell -----------------------------------------------------------
+// ---- auth / setup / shell -------------------------------------------------------
+
+let status = null;
 
 function showLogin(message) {
   $("#shell").hidden = true;
   $("#login-screen").hidden = false;
   if (message) $("#login-notice").textContent = message;
+  if (!status) return;
+  // Keys already saved: just offer the Zerodha login. Otherwise show the setup form.
+  if (status.has_kite_keys) {
+    const p = status.providers[status.provider];
+    $("#saved-summary").innerHTML = `
+      <li><span>✦</span> Kite app key ${esc(status.kite_key_hint)} saved</li>
+      <li><span>✦</span> ${status.has_ai ? `AI: ${esc(p?.label || status.provider)} · ${esc(status.model)}` : "No AI key yet: AI features are off"}</li>`;
+    $("#login-ready").hidden = false;
+    $("#setup-form").hidden = true;
+  } else {
+    showSetup();
+  }
 }
 
-async function boot() {
-  let s;
+function showSetup() {
+  const s = status;
+  $("#shell").hidden = true;
+  $("#login-screen").hidden = false;
+  $("#login-ready").hidden = true;
+  $("#setup-form").hidden = false;
+  $("#setup-error").hidden = true;
+  $("#callback-url").textContent = s.callback_url;
+
+  const sel = $("#f-provider");
+  sel.innerHTML = Object.entries(s.providers)
+    .map(([k, p]) => `<option value="${k}">${esc(p.label)}</option>`)
+    .join("");
+  sel.value = s.provider || "gemini";
+  $("#f-kite-key").value = "";
+  $("#f-kite-secret").value = "";
+  $("#f-ai-key").value = "";
+  $("#f-model").value = s.provider ? s.model : "";
+  $("#f-base-url").value = s.base_url || "";
+  $("#f-remember").checked = s.remember;
+  // Saved keys are never sent back to the page; show a hint and keep them if the field is left blank.
+  $("#f-kite-key").placeholder = s.kite_key_hint ? `Saved (${s.kite_key_hint}) - leave blank to keep` : "e.g. abcd1234efgh5678";
+  $("#f-kite-secret").placeholder = s.has_kite_keys ? "Saved - leave blank to keep" : "";
+  $("#back-to-app").hidden = !s.logged_in;
+  $("#forget-keys").hidden = !(s.has_kite_keys || s.has_ai);
+  $("#setup-submit").textContent = s.logged_in ? "Save" : "Save and log in with Zerodha";
+  onProviderChange();
+}
+
+function onProviderChange() {
+  const key = $("#f-provider").value;
+  const p = status.providers[key];
+  const same = key === status.provider && status.has_ai;
+  $("#f-ai-key").placeholder = same ? `Saved (${status.ai_key_hint}) - leave blank to keep` : "Paste your API key";
+  $("#f-model").placeholder = p.model || "e.g. deepseek/deepseek-chat";
+  $("#base-url-field").hidden = key !== "openai";
+  const link = $("#ai-key-link");
+  link.hidden = !p.key_url;
+  link.href = p.key_url || "#";
+  link.textContent = key === "gemini" ? "Get a free key ↗" : "Get a key ↗";
+}
+$("#f-provider").onchange = onProviderChange;
+
+$("#copy-callback").onclick = async () => {
   try {
-    s = await api("api/status");
+    await navigator.clipboard.writeText(status.callback_url);
+    $("#copy-callback").textContent = "Copied";
+    setTimeout(() => ($("#copy-callback").textContent = "Copy"), 1500);
+  } catch {}
+};
+
+$("#setup-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const err = $("#setup-error");
+  err.hidden = true;
+  const btn = $("#setup-submit");
+  btn.disabled = true;
+  try {
+    await api("api/setup", {
+      method: "POST",
+      body: JSON.stringify({
+        kite_api_key: $("#f-kite-key").value,
+        kite_api_secret: $("#f-kite-secret").value,
+        provider: $("#f-provider").value,
+        ai_key: $("#f-ai-key").value,
+        model: $("#f-model").value,
+        base_url: $("#f-base-url").value,
+        remember: $("#f-remember").checked,
+      }),
+    });
+    status = await api("api/status");
+    if (status.logged_in) location.reload();
+    else location.href = "login";
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.hidden = false;
+  }
+  btn.disabled = false;
+};
+
+$$("[data-demo]").forEach(
+  (b) =>
+    (b.onclick = async () => {
+      await api("api/demo", { method: "POST" });
+      location.reload();
+    })
+);
+$("#edit-keys").onclick = showSetup;
+$("#settings").onclick = showSetup;
+$("#back-to-app").onclick = () => {
+  $("#login-screen").hidden = true;
+  $("#shell").hidden = false;
+};
+$("#forget-keys").onclick = async () => {
+  if (!confirm("Delete all keys saved in this browser and log out?")) return;
+  await api("api/forget", { method: "POST" });
+  location.reload();
+};
+
+async function boot() {
+  try {
+    status = await api("api/status");
   } catch (e) {
     return showLogin(e.message);
   }
-  if (!s.logged_in) {
-    return showLogin(
-      s.missing_settings.length
-        ? `Set ${s.missing_settings.join(", ")} in .env and restart the server.`
-        : undefined
-    );
-  }
+  if (!status.logged_in) return showLogin();
+  const s = status;
   $("#login-screen").hidden = true;
   $("#shell").hidden = false;
   $("#demo-badge").hidden = !s.demo;
-  $("#model-name").textContent = s.model;
-  state.modelName = s.model;
+  $("#logout").textContent = s.demo ? "Exit demo" : "Log out";
+  $("#model-name").textContent = s.has_ai ? s.model : "No AI key - add one in Settings";
+  state.modelName = s.model || "AI";
   const name = s.user?.user_name || s.user?.user_id || "You";
   $("#user-chip").innerHTML = `<span class="avatar">${esc(name[0])}</span><span class="name">${esc(name)}</span>`;
   if (window.matchMedia("(max-width: 980px)").matches) $("#shell").classList.add("copilot-hidden");
@@ -578,7 +687,7 @@ async function ask(question) {
   try {
     const res = await fetch("api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
       body: JSON.stringify({ message: question }),
     });
     if (res.status === 401) return showLogin();

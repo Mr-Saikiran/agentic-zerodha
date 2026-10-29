@@ -1,7 +1,7 @@
 # Render Blueprint: Render dashboard → New → Blueprint → pick this repo.
-# Free plan notes: the service sleeps after 15 minutes without traffic and has no persistent disk,
-# so a sleep or redeploy logs you out of Kite. The Cloudflare Worker's cron (deploy/) keeps it awake
-# during market hours.
+# Visitors enter their own Kite and AI keys in the app, so no API keys are configured here.
+# Free plan notes: the service sleeps after 15 minutes without traffic (first visit then takes ~1 min);
+# saved keys and Kite logins survive that because they live in the visitor's encrypted cookie.
 services:
   - type: web
     name: agentic-zerodha
@@ -14,15 +14,9 @@ services:
     envVars:
       - key: BASE_PATH
         value: /equity
+      # The Redirect URL users set in their own Kite Connect app.
       - key: KITE_REDIRECT_URL
         value: https://techswitch.in/equity/callback
-      # Random value created by Render; copy it into the Cloudflare Worker's ORIGIN_SECRET.
-      - key: ORIGIN_SECRET
+      # Encrypts session cookies. Generated once by Render; changing it signs everyone out.
+      - key: SESSION_SECRET
         generateValue: true
-      # Render asks for these when you create the Blueprint; they're never stored in the repo.
-      - key: KITE_API_KEY
-        sync: false
-      - key: KITE_API_SECRET
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false

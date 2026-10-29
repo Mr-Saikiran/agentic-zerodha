@@ -4,8 +4,8 @@ import json
 import threading
 from collections.abc import Iterator
 
-from . import config, llm, news_feed
-from .kite_client import NotLoggedIn, session
+from . import llm, news_feed
+from .kite_client import NotLoggedIn
 
 SYSTEM_PROMPT = """You are the AI copilot inside a personal investing dashboard for a single Zerodha (Kite) account owner in India.
 
@@ -91,21 +91,21 @@ MAX_STEPS = 12
 STOPPED = "\n\n_Stopped after too many steps. Try a narrower question._"
 
 
-def _run_tool(name: str, args) -> str:
+def _run_tool(name: str, args, account) -> str:
     if name == "get_profile":
-        result = session.profile()
+        result = account.profile()
     elif name == "get_holdings":
-        result = session.holdings()
+        result = account.holdings()
     elif name == "get_positions":
-        result = session.positions()
+        result = account.positions()
     elif name == "get_funds":
-        result = session.funds()
+        result = account.funds()
     elif name == "get_quotes":
         # Eager input streaming skips server-side validation, so check the shape here.
         instruments = args.get("instruments") if isinstance(args, dict) else None
         if not isinstance(instruments, list) or not all(isinstance(i, str) for i in instruments):
             raise ValueError("instruments must be a list of EXCHANGE:SYMBOL strings")
-        result = session.quotes(instruments[:50])
+        result = account.quotes(instruments[:50])
     elif name == "search_news":
         query = args.get("query") if isinstance(args, dict) else None
         if not isinstance(query, str) or not query.strip():
@@ -119,28 +119,32 @@ def _run_tool(name: str, args) -> str:
 class PortfolioAgent:
     def __init__(self) -> None:
         self.messages: list = []
+        self.provider = ""
         self._lock = threading.Lock()
 
     def reset(self) -> None:
         with self._lock:
             self.messages = []
 
-    def chat_stream(self, user_text: str) -> Iterator[dict]:
-        """Yields UI events: {"type": "text"|"tool"|"done", ...}."""
+    def chat_stream(self, user_text: str, account, ai: llm.AI) -> Iterator[dict]:
+        """Yields UI events: {"type": "text"|"tool"|"done", ...}. `account` is the visitor's Kite account."""
         with self._lock:
+            if self.provider != ai.provider:
+                # History formats differ between providers; start over if the user switched.
+                self.messages, self.provider = [], ai.provider
             self.messages.append({"role": "user", "content": user_text})
             system = f"{SYSTEM_PROMPT}\n\nToday is {llm.today()} (IST)."
-            if llm.use_anthropic():
-                yield from self._claude_turn(system)
+            if ai.use_anthropic:
+                yield from self._claude_turn(system, account, ai)
             else:
-                yield from self._openai_turn(system)
+                yield from self._openai_turn(system, account, ai)
         yield {"type": "done"}
 
-    def _claude_turn(self, system: str) -> Iterator[dict]:
+    def _claude_turn(self, system: str, account, ai: llm.AI) -> Iterator[dict]:
         for _ in range(MAX_STEPS):
             try:
-                with llm.client().beta.messages.stream(
-                    **llm.COMMON,
+                with ai.anthropic_client().beta.messages.stream(
+                    **ai.claude_common(),
                     max_tokens=32000,
                     system=system,
                     tools=[*TOOLS, llm.web_search_tool(5)],
@@ -184,7 +188,7 @@ class PortfolioAgent:
             results = []
             for block in tool_uses:
                 try:
-                    content, is_error = _run_tool(block.name, block.input), False
+                    content, is_error = _run_tool(block.name, block.input, account), False
                 except NotLoggedIn:
                     content, is_error = "Zerodha session expired. Ask the user to log in again.", True
                 except Exception as e:
@@ -196,12 +200,12 @@ class PortfolioAgent:
             self.messages.append({"role": "user", "content": results})
         yield {"type": "text", "text": STOPPED}
 
-    def _openai_turn(self, system: str) -> Iterator[dict]:
+    def _openai_turn(self, system: str, account, ai: llm.AI) -> Iterator[dict]:
         """Same loop for Gemini / OpenAI-compatible chat completions (history kept in OpenAI format)."""
-        client = llm.openai_client()
+        client = ai.openai_client()
         for _ in range(MAX_STEPS):
             stream = client.chat.completions.create(
-                model=config.OPENAI_MODEL,
+                model=ai.model,
                 messages=[{"role": "system", "content": system}, *self.messages],
                 tools=OPENAI_TOOLS,
                 stream=True,
@@ -241,7 +245,7 @@ class PortfolioAgent:
             self.messages.append({"role": "assistant", "content": text or None, "tool_calls": tool_calls})
             for tc in tool_calls:
                 try:
-                    content = _run_tool(tc["function"]["name"], json.loads(tc["function"]["arguments"]))
+                    content = _run_tool(tc["function"]["name"], json.loads(tc["function"]["arguments"]), account)
                 except NotLoggedIn:
                     content = "Error: Zerodha session expired. Ask the user to log in again."
                 except Exception as e:
@@ -249,5 +253,3 @@ class PortfolioAgent:
                 self.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
         yield {"type": "text", "text": STOPPED}
 
-
-agent = PortfolioAgent()
