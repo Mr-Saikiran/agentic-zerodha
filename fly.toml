@@ -1,38 +1,38 @@
-# Fly.io config. App names are global on Fly: change `app` if this one is taken.
-app = "agentic-zerodha"
-primary_region = "sin"  # Singapore: nearest Fly region to Zerodha (Mumbai isn't available)
+# fly.toml app configuration file generated for agentic-zerodha on 2026-10-29T16:03:33Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'agentic-zerodha'
+primary_region = 'sin'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  BASE_PATH = "/equity"
-  KITE_REDIRECT_URL = "https://techswitch.in/equity/callback"
-  DATA_DIR = "/data"
-  PORT = "8000"
-  # Secrets are set with `fly secrets set`, never here:
-  # KITE_API_KEY, KITE_API_SECRET, ANTHROPIC_API_KEY, ORIGIN_SECRET
+  BASE_PATH = '/equity'
+  DATA_DIR = '/data'
+  KITE_REDIRECT_URL = 'https://techswitch.in/equity/callback'
+  PORT = '8000'
+
+[[mounts]]
+  source = 'equity_data'
+  destination = '/data'
 
 [http_service]
   internal_port = 8000
   force_https = true
-  # Keep the one machine always running: the Kite session, chat and research jobs live in memory.
-  auto_stop_machines = "off"
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
 
   [[http_service.checks]]
-    grace_period = "15s"
-    interval = "30s"
-    method = "GET"
-    path = "/healthz"
-    timeout = "5s"
-
-# Persists the cached Kite token across deploys and restarts.
-[mounts]
-  source = "equity_data"
-  destination = "/data"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '15s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = 'shared-cpu-1x'
+  memory = '512mb'
