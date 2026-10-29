@@ -10,7 +10,7 @@ routes = [
 
 [vars]
 # Public URL of the FastAPI container (Render, Railway, Fly.io, a VM...)
-ORIGIN_URL = "https://your-app.example.com"
+ORIGIN_URL = "https://agentic-zerodha.fly.dev"
 
 # Set the shared secret with:  npx wrangler secret put ORIGIN_SECRET
 # It must equal ORIGIN_SECRET in the app's environment.

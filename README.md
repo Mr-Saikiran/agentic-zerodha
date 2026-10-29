@@ -65,6 +65,25 @@ techswitch.in/*         → existing static site (unchanged)
 techswitch.in/equity/*  → Cloudflare Worker (deploy/) → FastAPI container
 ```
 
+### On Fly.io
+
+`fly.toml` is set up for one always-on machine in Mumbai (`bom`) with a 1 GB volume at `/data`.
+
+```bash
+fly auth login
+fly apps create agentic-zerodha            # pick another name if taken, and update `app` in fly.toml
+fly volumes create equity_data --region bom --size 1
+fly secrets set KITE_API_KEY=... KITE_API_SECRET=... ANTHROPIC_API_KEY=... ORIGIN_SECRET=...
+fly deploy --ha=false                       # exactly one machine
+```
+
+Check it: `curl https://agentic-zerodha.fly.dev/healthz` returns `{"ok":true}`, and
+`https://agentic-zerodha.fly.dev/equity/` returns 403 (no secret), as it should. Then set
+`ORIGIN_URL = "https://agentic-zerodha.fly.dev"` in `deploy/wrangler.toml` and continue from step 2 below.
+Logs: `fly logs`.
+
+### Any host
+
 1. **Run the container** on an always-on host (Render, Railway, Fly.io or a VM). Run exactly **one instance**:
    the Kite session, chat history and research jobs live in memory. Mount a volume at `/data` to keep the
    Kite token across restarts. Set these environment variables:

@@ -11,12 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY static ./static
+COPY docker-entrypoint.py .
 
-# Holds the cached Kite access token; mount a volume here to survive restarts.
-RUN mkdir -p /data && useradd --create-home appuser && chown appuser /data
-USER appuser
-VOLUME ["/data"]
+# /data holds the cached Kite access token; mount a volume there to survive restarts.
+RUN mkdir -p /data && useradd --create-home appuser
 
 EXPOSE 8000
-# One worker only: the Kite session, chat history and research jobs live in process memory.
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1 --proxy-headers --forwarded-allow-ips '*'
+# Starts as root to chown the volume, then drops to appuser and runs a single uvicorn worker.
+CMD ["python", "docker-entrypoint.py"]
