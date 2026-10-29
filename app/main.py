@@ -1,3 +1,4 @@
+import hmac
 import json
 
 import anthropic
@@ -12,16 +13,20 @@ from .agent import agent
 from .kite_client import NotLoggedIn, session
 from .research import ResearchError
 
-app = FastAPI(title="Agentic Zerodha")
-app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
+# `site` holds every route; `app` (bottom of file) mounts it under BASE_PATH, e.g. /equity.
+site = FastAPI(title="Agentic Zerodha", docs_url=None, redoc_url=None, openapi_url=None)
+site.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
+
+# The page lives at "<BASE_PATH>/" and uses relative URLs, so it works under any prefix.
+HOME = f"{config.BASE_PATH}/"
 
 
-@app.exception_handler(NotLoggedIn)
+@site.exception_handler(NotLoggedIn)
 async def not_logged_in(_: Request, __: NotLoggedIn):
-    return JSONResponse(status_code=401, content={"detail": "Not logged in to Zerodha. Visit /login."})
+    return JSONResponse(status_code=401, content={"detail": "Not logged in to Zerodha."})
 
 
-@app.get("/")
+@site.get("/")
 def index():
     return FileResponse(config.STATIC_DIR / "index.html")
 
@@ -29,14 +34,14 @@ def index():
 # ---- Kite login flow -------------------------------------------------------
 
 
-@app.get("/login")
+@site.get("/login")
 def login():
     if missing := config.missing_settings():
         raise HTTPException(500, f"Set {', '.join(missing)} in .env and restart the server.")
     return RedirectResponse(session.login_url())
 
 
-@app.get("/callback")
+@site.get("/callback")
 def callback(status: str | None = None, request_token: str | None = None, state: str | None = None):
     if status != "success" or not request_token:
         raise HTTPException(400, "Zerodha login was cancelled or failed.")
@@ -47,17 +52,18 @@ def callback(status: str | None = None, request_token: str | None = None, state:
     except KiteException as e:
         raise HTTPException(400, f"Could not create Kite session: {e}")
     agent.reset()
-    return RedirectResponse("/")
+    return RedirectResponse(HOME)
 
 
-@app.post("/logout")
+@site.post("/logout")
 def logout():
     session.logout()
     agent.reset()
+    research.reset()
     return {"ok": True}
 
 
-@app.get("/api/status")
+@site.get("/api/status")
 def status():
     return {
         "logged_in": session.is_logged_in(),
@@ -78,28 +84,28 @@ def _kite(fn, *args):
         raise HTTPException(502, f"Kite API error: {e}")
 
 
-@app.get("/api/holdings")
+@site.get("/api/holdings")
 def holdings():
     return _kite(session.holdings)
 
 
-@app.get("/api/positions")
+@site.get("/api/positions")
 def positions():
     return _kite(session.positions)
 
 
-@app.get("/api/funds")
+@site.get("/api/funds")
 def funds():
     return _kite(session.funds)
 
 
-@app.get("/api/quotes")
+@site.get("/api/quotes")
 def quotes(instruments: str):
     items = [i.strip() for i in instruments.split(",") if i.strip()][:50]
     return _kite(session.quotes, items)
 
 
-@app.get("/api/market")
+@site.get("/api/market")
 def market():
     return _kite(session.market)
 
@@ -126,11 +132,12 @@ def _claude_error(e: Exception) -> tuple[int, str]:
     raise e
 
 
-def _research(fn, refresh: bool):
+def _research(key: str, refresh: bool):
+    """Starts or polls a background research job: {"status": "running"} until {"status": "ready", ...}."""
     if not session.is_logged_in():
         raise NotLoggedIn()
     try:
-        return fn(refresh)
+        return research.get(key, refresh)
     except NotLoggedIn:
         raise
     except Exception as e:
@@ -138,21 +145,21 @@ def _research(fn, refresh: bool):
         raise HTTPException(status, detail)
 
 
-@app.get("/api/news")
+@site.get("/api/news")
 def news(refresh: bool = False):
-    return _research(research.news, refresh)
+    return _research("news", refresh)
 
 
-@app.get("/api/insights")
+@site.get("/api/insights")
 def insights(refresh: bool = False):
-    return _research(research.insights, refresh)
+    return _research("insights", refresh)
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
-@app.post("/api/chat")
+@site.post("/api/chat")
 def chat(req: ChatRequest):
     """Streams copilot events as Server-Sent Events."""
     if not session.is_logged_in():
@@ -172,7 +179,37 @@ def chat(req: ChatRequest):
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
-@app.post("/api/chat/reset")
+@site.post("/api/chat/reset")
 def chat_reset():
     agent.reset()
     return {"ok": True}
+
+
+# ---- Entry point: mount under BASE_PATH ------------------------------------------
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+
+@app.middleware("http")
+async def require_origin_secret(request: Request, call_next):
+    # Only requests forwarded by the Cloudflare Worker carry the secret; direct hits to the origin are refused.
+    if config.ORIGIN_SECRET and request.url.path != "/healthz":
+        supplied = request.headers.get("x-origin-auth", "")
+        if not hmac.compare_digest(supplied, config.ORIGIN_SECRET):
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    return await call_next(request)
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    return {"ok": True}
+
+
+if config.BASE_PATH:
+
+    @app.get(config.BASE_PATH, include_in_schema=False)
+    def base_redirect():
+        # Relative URLs in the page need the trailing slash.
+        return RedirectResponse(HOME)
+
+app.mount(config.BASE_PATH or "/", site)

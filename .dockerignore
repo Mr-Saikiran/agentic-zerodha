@@ -1,0 +1,9 @@
+.env
+.env.*
+.kite_session.json
+.venv/
+venv/
+.git/
+__pycache__/
+*.pyc
+deploy/

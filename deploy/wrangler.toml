@@ -1,0 +1,16 @@
+name = "techswitch-equity"
+main = "cloudflare-worker.js"
+compatibility_date = "2026-10-01"
+
+# Only /equity and /equity/* go to the app. "/equity*" alone would also catch e.g. /equity-notes.
+routes = [
+  { pattern = "techswitch.in/equity", zone_name = "techswitch.in" },
+  { pattern = "techswitch.in/equity/*", zone_name = "techswitch.in" },
+]
+
+[vars]
+# Public URL of the FastAPI container (Render, Railway, Fly.io, a VM...)
+ORIGIN_URL = "https://your-app.example.com"
+
+# Set the shared secret with:  npx wrangler secret put ORIGIN_SECRET
+# It must equal ORIGIN_SECRET in the app's environment.

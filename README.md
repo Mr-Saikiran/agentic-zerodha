@@ -58,7 +58,46 @@ doesn't log you out.
 The copilot's tools are `get_profile`, `get_holdings`, `get_positions`, `get_funds`, `get_quotes` and Claude's server-side `web_search`.
 News and Insights return structured JSON by having Claude call a strict `submit_news` / `submit_insights` tool.
 
+## Deploying to techswitch.in/equity
+
+```
+techswitch.in/*         → existing static site (unchanged)
+techswitch.in/equity/*  → Cloudflare Worker (deploy/) → FastAPI container
+```
+
+1. **Run the container** on an always-on host (Render, Railway, Fly.io or a VM). Run exactly **one instance**:
+   the Kite session, chat history and research jobs live in memory. Mount a volume at `/data` to keep the
+   Kite token across restarts. Set these environment variables:
+
+   | Variable | Value |
+   |---|---|
+   | `BASE_PATH` | `/equity` |
+   | `KITE_API_KEY`, `KITE_API_SECRET` | from your **production** Kite app |
+   | `KITE_REDIRECT_URL` | `https://techswitch.in/equity/callback` |
+   | `ANTHROPIC_API_KEY` | your Claude API key |
+   | `ORIGIN_SECRET` | a long random string, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+
+   Health check path: `/healthz` (it doesn't need the secret).
+2. **Kite developer console:** create a second Kite app for production with Redirect URL
+   `https://techswitch.in/equity/callback`. Keep the first one for local development at `127.0.0.1:5000`.
+3. **Cloudflare Worker:** edit `ORIGIN_URL` in `deploy/wrangler.toml`, then from `deploy/`:
+   ```bash
+   npx wrangler secret put ORIGIN_SECRET
+   npx wrangler deploy
+   ```
+   If techswitch.in is attached to a Worker as a *Custom Domain*, routes don't run before it. In that case add
+   this forwarding logic to the site's own Worker for paths starting with `/equity` instead.
+4. **Cloudflare Access (required):** Zero Trust → Access → Applications → Self-hosted, domain `techswitch.in`,
+   path `equity`, policy *Allow* → *Emails* → your email only. Without this, anyone who opens the URL sees your
+   portfolio and spends your Claude credits.
+
+To test the path prefix locally: `BASE_PATH=/equity uvicorn app.main:app --port 5000`, then open
+http://127.0.0.1:5000/equity/.
+
 ## Security notes
+
+- The app has no login of its own. When it's on the internet, Cloudflare Access is what keeps it private.
+- With `ORIGIN_SECRET` set, the container refuses any request that didn't come through the Worker.
 
 - The server binds to `127.0.0.1` only. Don't expose it publicly without adding authentication.
 - `KITE_API_SECRET` stays server-side. If it ever leaks, regenerate it in the Kite console.

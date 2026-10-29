@@ -14,8 +14,16 @@ CLAUDE_MODEL = os.getenv("COPILOT_MODEL", "claude-opus-5-5")
 # Serve sample portfolio data instead of calling Kite - for previewing the UI without logging in.
 DEMO_MODE = os.getenv("DEMO_MODE", "").lower() in ("1", "true", "yes")
 
+# URL prefix the app is served under, e.g. "/equity" for https://techswitch.in/equity/. Empty = site root.
+BASE_PATH = "/" + os.getenv("BASE_PATH", "").strip("/") if os.getenv("BASE_PATH", "").strip("/") else ""
+# When set, every request must carry this value in the X-Origin-Auth header. The Cloudflare Worker adds it,
+# so the origin can't be reached directly and bypass Cloudflare Access.
+ORIGIN_SECRET = os.getenv("ORIGIN_SECRET", "")
+
 # Access token is cached here (git-ignored) so a server restart doesn't force a re-login.
-SESSION_FILE = ROOT / ".kite_session.json"
+# Point DATA_DIR at a persistent volume when running in a container.
+DATA_DIR = Path(os.getenv("DATA_DIR", ROOT))
+SESSION_FILE = DATA_DIR / ".kite_session.json"
 STATIC_DIR = ROOT / "static"
 
 

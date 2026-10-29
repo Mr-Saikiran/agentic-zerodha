@@ -2,6 +2,7 @@
 
 Each task gives Claude web search plus a strict `submit_*` tool; the tool's input is the result.
 Results are cached in memory so page reloads don't re-run (and re-bill) the research.
+Call `get("news")` / `get("insights")`; the work runs in a background thread.
 """
 
 import json
@@ -13,10 +14,6 @@ from .kite_client import session
 
 CACHE_TTL = 30 * 60
 MAX_STEPS = 8
-
-_cache: dict[str, tuple[float, dict]] = {}
-_locks = {"news": threading.Lock(), "insights": threading.Lock()}
-
 
 class ResearchError(Exception):
     pass
@@ -146,38 +143,62 @@ def _run(prompt: str, tool: dict, web_uses: int, effort: str) -> dict:
     raise ResearchError("Research did not complete. Try again.")
 
 
-def _cached(key: str, refresh: bool, build) -> dict:
-    with _locks[key]:
-        hit = _cache.get(key)
-        if hit and not refresh and time.time() - hit[0] < CACHE_TTL:
-            return hit[1]
-        result = {**build(), "generated_at": time.time()}
-        _cache[key] = (time.time(), result)
-        return result
-
-
 def _holdings_table(holdings: list[dict]) -> str:
     rows = sorted(holdings, key=lambda h: h["current_value"], reverse=True)
     return json.dumps(rows, default=str)
 
 
-def news(refresh: bool = False) -> dict:
-    def build():
-        holdings = session.holdings()
-        top = sorted(holdings, key=lambda h: h["current_value"], reverse=True)[:12]
-        brief = "\n".join(f"- {h['symbol']} ({h['exchange']})" for h in top) or "- (no holdings)"
-        return _run(NEWS_PROMPT.format(today=llm.today(), holdings=brief), NEWS_TOOL, web_uses=8, effort="low")
-
-    return _cached("news", refresh, build)
+def _build_news() -> dict:
+    holdings = session.holdings()
+    top = sorted(holdings, key=lambda h: h["current_value"], reverse=True)[:12]
+    brief = "\n".join(f"- {h['symbol']} ({h['exchange']})" for h in top) or "- (no holdings)"
+    return _run(NEWS_PROMPT.format(today=llm.today(), holdings=brief), NEWS_TOOL, web_uses=8, effort="low")
 
 
-def insights(refresh: bool = False) -> dict:
-    def build():
-        prompt = INSIGHTS_PROMPT.format(
-            today=llm.today(),
-            holdings=_holdings_table(session.holdings()),
-            funds=json.dumps(session.funds(), default=str),
-        )
-        return _run(prompt, INSIGHTS_TOOL, web_uses=5, effort="high")
+def _build_insights() -> dict:
+    prompt = INSIGHTS_PROMPT.format(
+        today=llm.today(),
+        holdings=_holdings_table(session.holdings()),
+        funds=json.dumps(session.funds(), default=str),
+    )
+    return _run(prompt, INSIGHTS_TOOL, web_uses=5, effort="high")
 
-    return _cached("insights", refresh, build)
+
+BUILDERS = {"news": _build_news, "insights": _build_insights}
+
+# Research runs in a background thread and the UI polls, so no single HTTP request outlives
+# a proxy timeout (Cloudflare drops requests idle for ~100s).
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _work(key: str) -> None:
+    try:
+        result = BUILDERS[key]()
+        job = {"status": "ready", "result": {**result, "generated_at": time.time()}, "finished_at": time.time()}
+    except Exception as e:
+        job = {"status": "error", "error": e}
+    with _jobs_lock:
+        _jobs[key] = job
+
+
+def get(key: str, refresh: bool = False) -> dict:
+    """Returns {"status": "ready", ...result} or {"status": "running"}; re-raises a failed job's error once."""
+    with _jobs_lock:
+        job = _jobs.get(key)
+        if job and job["status"] == "running":
+            return {"status": "running", "started_at": job["started_at"]}
+        if job and job["status"] == "error" and not refresh:
+            del _jobs[key]
+            raise job["error"]
+        if job and job["status"] == "ready" and not refresh and time.time() - job["finished_at"] < CACHE_TTL:
+            return {"status": "ready", **job["result"]}
+        started_at = time.time()
+        _jobs[key] = {"status": "running", "started_at": started_at}
+    threading.Thread(target=_work, args=(key,), daemon=True).start()
+    return {"status": "running", "started_at": started_at}
+
+
+def reset() -> None:
+    with _jobs_lock:
+        _jobs.clear()

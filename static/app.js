@@ -54,7 +54,7 @@ function showLogin(message) {
 async function boot() {
   let s;
   try {
-    s = await api("/api/status");
+    s = await api("api/status");
   } catch (e) {
     return showLogin(e.message);
   }
@@ -78,7 +78,7 @@ async function boot() {
 }
 
 $("#logout").onclick = async () => {
-  await api("/logout", { method: "POST" });
+  await api("logout", { method: "POST" });
   location.reload();
 };
 
@@ -118,7 +118,7 @@ function toastError(msg) {
 
 async function loadMarket() {
   try {
-    const idx = await api("/api/market");
+    const idx = await api("api/market");
     $("#ticker").innerHTML = idx
       .map(
         (i) => `<div class="tick"><span class="n">${esc(i.name)}</span>
@@ -134,9 +134,9 @@ async function loadMarket() {
 
 async function loadPortfolio() {
   const [holdings, positions, funds] = await Promise.all([
-    api("/api/holdings"),
-    api("/api/positions"),
-    api("/api/funds"),
+    api("api/holdings"),
+    api("api/positions"),
+    api("api/funds"),
   ]);
   Object.assign(state, { holdings, positions, funds });
   renderOverview();
@@ -320,12 +320,22 @@ function errorState(msg, retryId) {
     <button class="btn ghost small" id="${retryId}">Try again</button></div></div>`;
 }
 
+// News and insights run as background jobs on the server: start one, then poll until it's ready.
+async function pollJob(path, refresh) {
+  let res = await api(`${path}${refresh ? "?refresh=true" : ""}`);
+  while (res.status === "running") {
+    await new Promise((r) => setTimeout(r, 3000));
+    res = await api(path);
+  }
+  return res;
+}
+
 async function loadNews(refresh = false) {
   const body = $("#news-body");
   $("#news-refresh").disabled = true;
   body.innerHTML = loadingState(["Searching the web for news on your holdings…", "This usually takes 30–60 seconds."]);
   try {
-    state.news = await api(`/api/news${refresh ? "?refresh=true" : ""}`);
+    state.news = await pollJob("api/news", refresh);
     renderNews();
   } catch (e) {
     body.innerHTML = errorState(e.message, "news-retry");
@@ -405,7 +415,7 @@ async function loadInsights(refresh) {
     "Drafting ideas — usually 45–90 seconds.",
   ]);
   try {
-    state.insights = await api(`/api/insights${refresh ? "?refresh=true" : ""}`);
+    state.insights = await pollJob("api/insights", refresh);
     renderInsights();
     $("#insights-run").textContent = "↻ Regenerate";
   } catch (e) {
@@ -564,7 +574,7 @@ async function ask(question) {
   const markToolsDone = () => $$(".tool-pill", toolsEl).forEach((p) => p.classList.add("done"));
 
   try {
-    const res = await fetch("/api/chat", {
+    const res = await fetch("api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: question }),
@@ -630,7 +640,7 @@ $("#prompt").addEventListener("input", (e) => {
 });
 $("#chat-reset").onclick = async () => {
   if (busy) return;
-  await api("/api/chat/reset", { method: "POST" });
+  await api("api/chat/reset", { method: "POST" });
   renderWelcome();
 };
 
