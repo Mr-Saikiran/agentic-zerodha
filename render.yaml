@@ -1,0 +1,28 @@
+# Render Blueprint: Render dashboard → New → Blueprint → pick this repo.
+# Free plan notes: the service sleeps after 15 minutes without traffic and has no persistent disk,
+# so a sleep or redeploy logs you out of Kite. The Cloudflare Worker's cron (deploy/) keeps it awake
+# during market hours.
+services:
+  - type: web
+    name: agentic-zerodha
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: BASE_PATH
+        value: /equity
+      - key: KITE_REDIRECT_URL
+        value: https://techswitch.in/equity/callback
+      # Random value created by Render; copy it into the Cloudflare Worker's ORIGIN_SECRET.
+      - key: ORIGIN_SECRET
+        generateValue: true
+      # Render asks for these when you create the Blueprint; they're never stored in the repo.
+      - key: KITE_API_KEY
+        sync: false
+      - key: KITE_API_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

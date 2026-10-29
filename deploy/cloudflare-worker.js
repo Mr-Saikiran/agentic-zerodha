@@ -19,4 +19,10 @@ export default {
       redirect: "manual",
     });
   },
+
+  // Cron trigger (see wrangler.toml): pings the origin so Render's free plan doesn't put it to sleep,
+  // which would drop the in-memory Kite session.
+  async scheduled(_event, env, ctx) {
+    ctx.waitUntil(fetch(new URL("/healthz", env.ORIGIN_URL)));
+  },
 };

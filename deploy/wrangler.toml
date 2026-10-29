@@ -8,9 +8,15 @@ routes = [
   { pattern = "techswitch.in/equity/*", zone_name = "techswitch.in" },
 ]
 
+# Keep-awake ping for Render's free plan, every 10 minutes during Indian market hours
+# (Mon-Fri 07:30-17:30 IST = 02:00-11:59 UTC). This uses about 220 of Render's 750 free hours a month.
+# For 24/7 use "*/10 * * * *" (about 744 hours, just inside the free limit). Remove it on a paid host.
+[triggers]
+crons = ["*/10 2-11 * * 1-5"]
+
 [vars]
 # Public URL of the FastAPI container (Render, Railway, Fly.io, a VM...)
-ORIGIN_URL = "https://agentic-zerodha.fly.dev"
+ORIGIN_URL = "https://agentic-zerodha.onrender.com"
 
 # Set the shared secret with:  npx wrangler secret put ORIGIN_SECRET
 # It must equal ORIGIN_SECRET in the app's environment.

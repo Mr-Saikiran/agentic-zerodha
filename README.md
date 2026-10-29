@@ -68,6 +68,23 @@ techswitch.in/*         → existing static site (unchanged)
 techswitch.in/equity/*  → Cloudflare Worker (deploy/) → FastAPI container
 ```
 
+### On Render (free)
+
+`render.yaml` is a Blueprint for a free Docker web service in Singapore.
+
+1. Render dashboard → **New → Blueprint** → connect `Mr-Saikiran/agentic-zerodha`.
+2. Render asks for `KITE_API_KEY`, `KITE_API_SECRET` and `GEMINI_API_KEY`; enter them there. It generates
+   `ORIGIN_SECRET` itself: open the service → **Environment** and copy that value for the Worker.
+3. After the first deploy, `https://agentic-zerodha.onrender.com/` returns `{"ok":true,...}` and `/equity/`
+   returns 403 (no secret), as it should. If Render gave the service a different URL, put it in
+   `ORIGIN_URL` in `deploy/wrangler.toml`.
+4. Deploy the Worker (step 3 under "Any host"). Its cron trigger pings `/healthz` every 10 minutes during
+   market hours so the free service doesn't sleep.
+
+Free-plan limits: no persistent disk and a sleep after 15 idle minutes, so a sleep or redeploy logs you out
+of Kite and clears the chat (you log in daily anyway; Kite tokens expire around 6 AM). The first request
+after a sleep takes about a minute.
+
 ### On Fly.io
 
 `fly.toml` is set up for one always-on machine in Singapore (`sin`) with a 1 GB volume at `/data`.
