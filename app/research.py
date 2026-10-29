@@ -9,7 +9,9 @@ import json
 import threading
 import time
 
-from . import llm
+import openai
+
+from . import config, llm, news_feed
 from .kite_client import session
 
 CACHE_TTL = 30 * 60
@@ -148,19 +150,135 @@ def _holdings_table(holdings: list[dict]) -> str:
     return json.dumps(rows, default=str)
 
 
+def _top_symbols(holdings: list[dict], n: int) -> list[str]:
+    return [h["symbol"] for h in sorted(holdings, key=lambda h: h["current_value"], reverse=True)[:n]]
+
+
+# ---- Gemini / OpenAI-compatible path: headlines come from Google News RSS, not web search ----
+
+FEED_NEWS_TOOL_SCHEMA = _obj(
+    {
+        "market_summary": _str,
+        "items": {
+            "type": "array",
+            "items": _obj(
+                {
+                    "article_id": {"type": "integer", "description": "id of the headline this item is about"},
+                    "summary": _str,
+                    "symbols": _strs,
+                    "sentiment": {"type": "string", "enum": ["positive", "negative", "neutral"]},
+                    "impact": _level,
+                }
+            ),
+        },
+    }
+)
+
+FEED_NEWS_PROMPT = """Today is {today} (IST). These are recent Google News headlines about this investor's Indian equity holdings and the market.
+
+Holdings (largest first): {symbols}
+
+Headlines (JSON; each has an id):
+{articles}
+
+Choose the 8-15 stories that matter most to this investor, most important first. Skip duplicates, ads and low-quality items.
+For each, give its article_id, a 1-2 sentence summary of what happened and why it matters to this portfolio,
+the affected holdings' symbols (empty for market-wide news), sentiment and impact.
+Also write market_summary: 2-3 sentences on the Indian market mood this week.
+
+Reply with JSON only, matching this JSON schema:
+{schema}"""
+
+
+def _parse_json(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+    start, end = text.find("{"), text.rfind("}")
+    try:
+        return json.loads(text[start : end + 1])
+    except ValueError:
+        raise ResearchError("The model didn't return valid JSON. Try again.")
+
+
+def _openai_json(prompt: str, name: str, schema: dict) -> dict:
+    client = llm.openai_client()
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        response = client.chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=messages,
+            response_format={"type": "json_schema", "json_schema": {"name": name, "schema": schema, "strict": True}},
+        )
+    except openai.BadRequestError:
+        # Some providers don't accept json_schema; the schema is also in the prompt.
+        response = client.chat.completions.create(
+            model=config.OPENAI_MODEL, messages=messages, response_format={"type": "json_object"}
+        )
+    return _parse_json(response.choices[0].message.content or "")
+
+
+def _feed_news(holdings: list[dict]) -> dict:
+    symbols = _top_symbols(holdings, 10)
+    articles = news_feed.portfolio_news(symbols)
+    if not articles:
+        raise ResearchError("Couldn't fetch news headlines right now. Try again shortly.")
+    brief = [{k: a[k] for k in ("id", "title", "source", "published", "symbol")} for a in articles]
+    prompt = FEED_NEWS_PROMPT.format(
+        today=llm.today(),
+        symbols=", ".join(symbols) or "(no holdings)",
+        articles=json.dumps(brief, ensure_ascii=False),
+        schema=json.dumps(FEED_NEWS_TOOL_SCHEMA),
+    )
+    result = _openai_json(prompt, "news_digest", FEED_NEWS_TOOL_SCHEMA)
+    by_id = {a["id"]: a for a in articles}
+    items = []
+    for item in result.get("items", []):
+        # Title, link, source and date come from the feed, so the model can't invent a URL.
+        a = by_id.get(item.get("article_id"))
+        if a:
+            items.append({
+                "title": a["title"], "url": a["url"], "source": a["source"], "published": a["published"],
+                "summary": item.get("summary", ""), "symbols": item.get("symbols") or ([a["symbol"]] if a["symbol"] else []),
+                "sentiment": item.get("sentiment", "neutral"), "impact": item.get("impact", "low"),
+            })
+    return {"market_summary": result.get("market_summary", ""), "items": items}
+
+
+def _feed_insights(prompt: str, holdings: list[dict]) -> dict:
+    headlines = [
+        {k: a[k] for k in ("title", "source", "published", "symbol")}
+        for a in news_feed.portfolio_news(_top_symbols(holdings, 6), per_symbol=3)
+    ]
+    prompt = (
+        prompt.replace(
+            "3. Use web search sparingly to check recent developments for the largest positions and any idea you propose.",
+            "3. Use the recent headlines below to check developments for the largest positions.",
+        ).replace("When done, call submit_insights.", "")
+        + f"\nRecent headlines:\n{json.dumps(headlines, ensure_ascii=False)}\n\n"
+        + f"Reply with JSON only, matching this JSON schema:\n{json.dumps(INSIGHTS_TOOL['input_schema'])}"
+    )
+    return _openai_json(prompt, "portfolio_review", INSIGHTS_TOOL["input_schema"])
+
+
 def _build_news() -> dict:
     holdings = session.holdings()
+    if not llm.use_anthropic():
+        return _feed_news(holdings)
     top = sorted(holdings, key=lambda h: h["current_value"], reverse=True)[:12]
     brief = "\n".join(f"- {h['symbol']} ({h['exchange']})" for h in top) or "- (no holdings)"
     return _run(NEWS_PROMPT.format(today=llm.today(), holdings=brief), NEWS_TOOL, web_uses=8, effort="low")
 
 
 def _build_insights() -> dict:
+    holdings = session.holdings()
     prompt = INSIGHTS_PROMPT.format(
         today=llm.today(),
-        holdings=_holdings_table(session.holdings()),
+        holdings=_holdings_table(holdings),
         funds=json.dumps(session.funds(), default=str),
     )
+    if not llm.use_anthropic():
+        return _feed_insights(prompt, holdings)
     return _run(prompt, INSIGHTS_TOOL, web_uses=5, effort="high")
 
 

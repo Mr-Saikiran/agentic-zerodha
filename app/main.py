@@ -2,6 +2,7 @@ import hmac
 import json
 
 import anthropic
+import openai
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -69,7 +70,8 @@ def status():
         "logged_in": session.is_logged_in(),
         "user": session.user,
         "missing_settings": config.missing_settings(),
-        "model": config.CLAUDE_MODEL,
+        "model": config.MODEL_NAME,
+        "provider": config.LLM_PROVIDER,
         "demo": config.DEMO_MODE,
     }
 
@@ -125,6 +127,18 @@ def _claude_error(e: Exception) -> tuple[int, str]:
     if isinstance(e, anthropic.AnthropicError):
         # e.g. no credentials found when the client is first created
         return 500, f"Claude client error: {e}"
+    # Gemini / OpenAI-compatible providers
+    name = "Gemini" if config.LLM_PROVIDER == "gemini" else "AI provider"
+    if isinstance(e, openai.AuthenticationError | openai.PermissionDeniedError):
+        return 500, f"{name} API key is missing or invalid."
+    if isinstance(e, openai.RateLimitError):
+        return 429, f"{name} rate limit or free-tier quota hit. Try again shortly."
+    if isinstance(e, openai.APIStatusError):
+        return 502, f"{name} API error ({e.status_code}): {e.message}"
+    if isinstance(e, openai.APIConnectionError):
+        return 502, f"Could not reach the {name} API."
+    if isinstance(e, openai.OpenAIError):
+        return 500, f"{name} client error: {e}"
     if isinstance(e, ResearchError):
         return 502, str(e)
     if isinstance(e, KiteException):
@@ -189,11 +203,14 @@ def chat_reset():
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
+# Reachable without the origin secret: host health checks (Fly's launcher probes "/"). They return no data.
+PUBLIC_PATHS = {"/healthz", "/"} if config.BASE_PATH else {"/healthz"}
+
 
 @app.middleware("http")
 async def require_origin_secret(request: Request, call_next):
     # Only requests forwarded by the Cloudflare Worker carry the secret; direct hits to the origin are refused.
-    if config.ORIGIN_SECRET and request.url.path != "/healthz":
+    if config.ORIGIN_SECRET and request.url.path not in PUBLIC_PATHS:
         supplied = request.headers.get("x-origin-auth", "")
         if not hmac.compare_digest(supplied, config.ORIGIN_SECRET):
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
@@ -206,6 +223,11 @@ def healthz():
 
 
 if config.BASE_PATH:
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        # The app itself lives under BASE_PATH; this only answers uptime checks on the bare host.
+        return {"ok": True, "app": f"{config.BASE_PATH}/"}
 
     @app.get(config.BASE_PATH, include_in_schema=False)
     def base_redirect():

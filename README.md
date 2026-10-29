@@ -9,15 +9,18 @@ A local web app for your Zerodha account: a portfolio dashboard with an AI copil
 
 **Read-only for now.** The app cannot place, modify or cancel orders. AI insights are not investment advice.
 
-News and Insights each run a Claude request with web search, so they cost a few cents per run. Results are cached for 30 minutes; use **Refresh** to re-run.
+Results of News and Insights are cached for 30 minutes; use **Refresh** to re-run.
 
-**Preview without logging in:** set `DEMO_MODE=1` in `.env` to load sample portfolio data. The AI features still need `ANTHROPIC_API_KEY`.
+**Preview without logging in:** set `DEMO_MODE=1` in `.env` to load sample portfolio data. The AI features still need an AI provider key.
 
 ## Stack
 
 - **Backend:** FastAPI on `http://127.0.0.1:5000`
 - **Broker:** [Kite Connect](https://kite.trade/docs/connect/v3/) via the `kiteconnect` SDK
-- **Agent:** Claude (`claude-opus-5-5`) through the Anthropic SDK, using read-only tools
+- **AI:** pick a provider with one key:
+  - **Gemini** (`GEMINI_API_KEY`, free tier): `gemini-flash-latest` via Gemini's OpenAI-compatible API. News comes from Google News RSS (free, no key).
+  - **Claude** (`ANTHROPIC_API_KEY`, pay-per-use): `claude-opus-5-5` with Claude's built-in web search.
+  - **Any OpenAI-compatible API** (`LLM_PROVIDER=openai`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `COPILOT_MODEL`): OpenRouter, Groq, OpenCode, Ollama...
 - **Frontend:** plain HTML/CSS/JS in `static/`
 
 ## Setup
@@ -32,7 +35,7 @@ News and Insights each run a Claude request with web search, so they cost a few 
    pip install -r requirements.txt
    ```
 3. **Configure secrets:** copy `.env.example` to `.env` and fill in `KITE_API_KEY`,
-   `KITE_API_SECRET` and `ANTHROPIC_API_KEY`. `.env` is git-ignored. Never commit it.
+   `KITE_API_SECRET` and `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY`). `.env` is git-ignored. Never commit it.
 4. **Run:**
    ```bash
    uvicorn app.main:app --host 127.0.0.1 --port 5000 --reload
@@ -73,7 +76,7 @@ techswitch.in/equity/*  → Cloudflare Worker (deploy/) → FastAPI container
 fly auth login
 fly apps create agentic-zerodha            # pick another name if taken, and update `app` in fly.toml
 fly volumes create equity_data --region sin --size 1
-fly secrets set KITE_API_KEY=... KITE_API_SECRET=... ANTHROPIC_API_KEY=... ORIGIN_SECRET=...
+fly secrets set KITE_API_KEY=... KITE_API_SECRET=... GEMINI_API_KEY=... ORIGIN_SECRET=...
 fly deploy --ha=false                       # exactly one machine
 ```
 
@@ -93,7 +96,7 @@ Logs: `fly logs`.
    | `BASE_PATH` | `/equity` |
    | `KITE_API_KEY`, `KITE_API_SECRET` | from your **production** Kite app |
    | `KITE_REDIRECT_URL` | `https://techswitch.in/equity/callback` |
-   | `ANTHROPIC_API_KEY` | your Claude API key |
+   | `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY`) | your AI provider key |
    | `ORIGIN_SECRET` | a long random string, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 
    Health check path: `/healthz` (it doesn't need the secret).

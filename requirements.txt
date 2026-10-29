@@ -3,3 +3,4 @@ uvicorn[standard]>=0.30
 kiteconnect>=5.0
 anthropic>=0.116
 python-dotenv>=1.0
+openai>=1.60

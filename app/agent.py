@@ -4,7 +4,7 @@ import json
 import threading
 from collections.abc import Iterator
 
-from . import llm
+from . import config, llm, news_feed
 from .kite_client import NotLoggedIn, session
 
 SYSTEM_PROMPT = """You are the AI copilot inside a personal investing dashboard for a single Zerodha (Kite) account owner in India.
@@ -60,6 +60,23 @@ TOOLS = [
 for _t in TOOLS:
     _t["eager_input_streaming"] = True
 
+# Gemini/OpenAI-compatible providers have no built-in web search; this free news tool stands in for it.
+NEWS_TOOL = {
+    "name": "search_news",
+    "description": "Search recent news headlines (Google News, past 7 days) for a company, stock symbol or market topic. Returns title, source, date and link.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "e.g. 'Infosys results' or 'RBI repo rate'"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
+OPENAI_TOOLS = [
+    {"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
+    for t in [*TOOLS, NEWS_TOOL]
+]
+
 TOOL_LABELS = {
     "get_profile": "Reading profile",
     "get_holdings": "Reading holdings",
@@ -67,9 +84,11 @@ TOOL_LABELS = {
     "get_funds": "Checking funds",
     "get_quotes": "Fetching live quotes",
     "web_search": "Searching the web",
+    "search_news": "Searching news",
 }
 
 MAX_STEPS = 12
+STOPPED = "\n\n_Stopped after too many steps. Try a narrower question._"
 
 
 def _run_tool(name: str, args) -> str:
@@ -87,6 +106,11 @@ def _run_tool(name: str, args) -> str:
         if not isinstance(instruments, list) or not all(isinstance(i, str) for i in instruments):
             raise ValueError("instruments must be a list of EXCHANGE:SYMBOL strings")
         result = session.quotes(instruments[:50])
+    elif name == "search_news":
+        query = args.get("query") if isinstance(args, dict) else None
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty string")
+        result = news_feed.search(query.strip())
     else:
         raise ValueError(f"Unknown tool: {name}")
     return json.dumps(result, default=str)
@@ -106,68 +130,124 @@ class PortfolioAgent:
         with self._lock:
             self.messages.append({"role": "user", "content": user_text})
             system = f"{SYSTEM_PROMPT}\n\nToday is {llm.today()} (IST)."
-
-            for _ in range(MAX_STEPS):
-                try:
-                    with llm.client().beta.messages.stream(
-                        **llm.COMMON,
-                        max_tokens=32000,
-                        system=system,
-                        tools=[*TOOLS, llm.web_search_tool(5)],
-                        messages=self.messages,
-                        output_config={"effort": "medium"},
-                    ) as stream:
-                        for event in stream:
-                            if event.type == "text":
-                                yield {"type": "text", "text": event.text}
-                            elif event.type == "content_block_start" and event.content_block.type in (
-                                "tool_use",
-                                "server_tool_use",
-                            ):
-                                name = event.content_block.name
-                                yield {"type": "tool", "name": name, "label": TOOL_LABELS.get(name, name)}
-                        response = stream.get_final_message()
-                except ValueError:
-                    # Tool input JSON the SDK couldn't parse; re-issue the turn.
-                    continue
-
-                # Append the full content (thinking, tool and search blocks) unchanged.
-                self.messages.append({"role": "assistant", "content": response.content})
-
-                if response.stop_reason == "pause_turn":
-                    continue
-
-                tool_uses = [b for b in response.content if b.type == "tool_use"]
-                if response.stop_reason in ("refusal", "max_tokens"):
-                    # Don't run a possibly cut-off tool call, but answer it so the history stays valid.
-                    if tool_uses:
-                        self.messages.append({"role": "user", "content": [
-                            {"type": "tool_result", "tool_use_id": b.id, "content": "Not run.", "is_error": True}
-                            for b in tool_uses
-                        ]})
-                    if response.stop_reason == "refusal":
-                        yield {"type": "text", "text": "\n\nSorry, I can't help with that request."}
-                    break
-                if not tool_uses:
-                    break
-
-                results = []
-                for block in tool_uses:
-                    try:
-                        content, is_error = _run_tool(block.name, block.input), False
-                    except NotLoggedIn:
-                        content, is_error = "Zerodha session expired. Ask the user to log in again.", True
-                    except Exception as e:
-                        content, is_error = f"Tool failed: {e}", True
-                    results.append(
-                        {"type": "tool_result", "tool_use_id": block.id, "content": content, "is_error": is_error}
-                    )
-                # All tool results go back in a single user message.
-                self.messages.append({"role": "user", "content": results})
+            if llm.use_anthropic():
+                yield from self._claude_turn(system)
             else:
-                yield {"type": "text", "text": "\n\n_Stopped after too many steps. Try a narrower question._"}
-
+                yield from self._openai_turn(system)
         yield {"type": "done"}
+
+    def _claude_turn(self, system: str) -> Iterator[dict]:
+        for _ in range(MAX_STEPS):
+            try:
+                with llm.client().beta.messages.stream(
+                    **llm.COMMON,
+                    max_tokens=32000,
+                    system=system,
+                    tools=[*TOOLS, llm.web_search_tool(5)],
+                    messages=self.messages,
+                    output_config={"effort": "medium"},
+                ) as stream:
+                    for event in stream:
+                        if event.type == "text":
+                            yield {"type": "text", "text": event.text}
+                        elif event.type == "content_block_start" and event.content_block.type in (
+                            "tool_use",
+                            "server_tool_use",
+                        ):
+                            name = event.content_block.name
+                            yield {"type": "tool", "name": name, "label": TOOL_LABELS.get(name, name)}
+                    response = stream.get_final_message()
+            except ValueError:
+                # Tool input JSON the SDK couldn't parse; re-issue the turn.
+                continue
+
+            # Append the full content (thinking, tool and search blocks) unchanged.
+            self.messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason == "pause_turn":
+                continue
+
+            tool_uses = [b for b in response.content if b.type == "tool_use"]
+            if response.stop_reason in ("refusal", "max_tokens"):
+                # Don't run a possibly cut-off tool call, but answer it so the history stays valid.
+                if tool_uses:
+                    self.messages.append({"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": b.id, "content": "Not run.", "is_error": True}
+                        for b in tool_uses
+                    ]})
+                if response.stop_reason == "refusal":
+                    yield {"type": "text", "text": "\n\nSorry, I can't help with that request."}
+                return
+            if not tool_uses:
+                return
+
+            results = []
+            for block in tool_uses:
+                try:
+                    content, is_error = _run_tool(block.name, block.input), False
+                except NotLoggedIn:
+                    content, is_error = "Zerodha session expired. Ask the user to log in again.", True
+                except Exception as e:
+                    content, is_error = f"Tool failed: {e}", True
+                results.append(
+                    {"type": "tool_result", "tool_use_id": block.id, "content": content, "is_error": is_error}
+                )
+            # All tool results go back in a single user message.
+            self.messages.append({"role": "user", "content": results})
+        yield {"type": "text", "text": STOPPED}
+
+    def _openai_turn(self, system: str) -> Iterator[dict]:
+        """Same loop for Gemini / OpenAI-compatible chat completions (history kept in OpenAI format)."""
+        client = llm.openai_client()
+        for _ in range(MAX_STEPS):
+            stream = client.chat.completions.create(
+                model=config.OPENAI_MODEL,
+                messages=[{"role": "system", "content": system}, *self.messages],
+                tools=OPENAI_TOOLS,
+                stream=True,
+            )
+            text, calls, finish = "", {}, None
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                delta = choice.delta
+                if delta.content:
+                    text += delta.content
+                    yield {"type": "text", "text": delta.content}
+                for i, tc in enumerate(delta.tool_calls or []):
+                    # Some providers omit `index`; fall back to the position in this chunk.
+                    slot = calls.setdefault(tc.index if tc.index is not None else i, {"id": None, "name": "", "args": ""})
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function and tc.function.name and not slot["name"]:
+                        slot["name"] = tc.function.name
+                        yield {"type": "tool", "name": slot["name"], "label": TOOL_LABELS.get(slot["name"], slot["name"])}
+                    if tc.function and tc.function.arguments:
+                        slot["args"] += tc.function.arguments
+                finish = choice.finish_reason or finish
+
+            if not calls:
+                self.messages.append({"role": "assistant", "content": text})
+                if finish == "content_filter":
+                    yield {"type": "text", "text": "\n\nSorry, I can't help with that request."}
+                return
+
+            tool_calls = [
+                {"id": c["id"] or f"call_{n}", "type": "function",
+                 "function": {"name": c["name"], "arguments": c["args"] or "{}"}}
+                for n, c in sorted(calls.items())
+            ]
+            self.messages.append({"role": "assistant", "content": text or None, "tool_calls": tool_calls})
+            for tc in tool_calls:
+                try:
+                    content = _run_tool(tc["function"]["name"], json.loads(tc["function"]["arguments"]))
+                except NotLoggedIn:
+                    content = "Error: Zerodha session expired. Ask the user to log in again."
+                except Exception as e:
+                    content = f"Error: tool failed: {e}"
+                self.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
+        yield {"type": "text", "text": STOPPED}
 
 
 agent = PortfolioAgent()
