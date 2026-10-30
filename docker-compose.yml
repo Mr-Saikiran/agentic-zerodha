@@ -1,0 +1,23 @@
+# Self-hosting on your own server.
+#   App only (reachable at http://127.0.0.1:8000 on the server):  docker compose up -d --build
+#   App + Cloudflare Tunnel (published on your domain):            docker compose --profile tunnel up -d --build
+# Settings come from .env (see .env.example): SESSION_SECRET, BASE_PATH, KITE_REDIRECT_URL, CLOUDFLARE_TUNNEL_TOKEN.
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    # Bound to localhost only; the tunnel (or your own reverse proxy) is what makes it public.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - app

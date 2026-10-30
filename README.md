@@ -106,6 +106,34 @@ and Kite logins survive that, because they're in the visitor's cookie; open chat
 
 `Dockerfile` runs anywhere (Fly.io, Railway, a VM): one worker, port from `$PORT`. `fly.toml` is an example for Fly.io.
 
+## Self-hosting on your own server (Docker + Cloudflare Tunnel)
+
+No public IP, open ports or TLS certificates needed; the tunnel connects out to Cloudflare.
+
+1. Install Docker on the server (Linux: `curl -fsSL https://get.docker.com | sh`).
+2. Get the code and settings:
+   ```bash
+   git clone https://github.com/Mr-Saikiran/agentic-zerodha.git && cd agentic-zerodha
+   cp .env.example .env
+   ```
+   In `.env` set `SESSION_SECRET` (long random value), `BASE_PATH=/equity` and
+   `KITE_REDIRECT_URL=https://techswitch.in/equity/callback`.
+3. Cloudflare dashboard → **Zero Trust → Networks → Tunnels → Create a tunnel** (Cloudflared). Copy the token
+   into `.env` as `CLOUDFLARE_TUNNEL_TOKEN`. Add a **public hostname**, e.g. `equity-origin.techswitch.in`,
+   with service **HTTP** → `app:8000`.
+4. Start both containers (they restart automatically after reboots):
+   ```bash
+   docker compose --profile tunnel up -d --build
+   ```
+5. Point the Worker at it: `ORIGIN_URL = "https://equity-origin.techswitch.in"` in `deploy/wrangler.toml`,
+   remove the `[triggers]` keep-awake cron (not needed on your own server), then `npx wrangler deploy`.
+   Optional: set the same `ORIGIN_SECRET` in `.env` and with `npx wrangler secret put ORIGIN_SECRET` so
+   `equity-origin.techswitch.in` only answers the Worker.
+
+Without the Worker, publish the tunnel straight to e.g. `equity.techswitch.in` and leave `BASE_PATH` empty.
+
+Update: `git pull && docker compose --profile tunnel up -d --build`. Logs: `docker compose logs -f app`.
+
 ## Security notes
 
 - Treat the server as trusted with users' keys while their requests are in flight; self-host for full control.
