@@ -12,12 +12,13 @@ export default {
     headers.set("X-Forwarded-Proto", "https");
 
     // Pass the response through as-is: SSE chat streams aren't buffered, and redirects reach the browser.
-    return fetch(target, {
+    const res = await fetch(target, {
       method: request.method,
       headers,
       body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
       redirect: "manual",
     });
+    return withHomeBadge(res);
   },
 
   // Cron trigger (see wrangler.toml): pings the origin so Render's free plan doesn't put it to sleep
@@ -26,3 +27,12 @@ export default {
     ctx.waitUntil(fetch(new URL("/healthz", env.ORIGIN_URL)));
   },
 };
+
+// HTML pages get techswitch.in's home link (a small fixed TechSwitch mark, see
+// techswitch-website/public/home-badge.js). Everything else, including the SSE chat stream, passes untouched.
+function withHomeBadge(res) {
+  if (!(res.headers.get("Content-Type") || "").includes("text/html")) return res;
+  return new HTMLRewriter()
+    .on("head", { element(head) { head.append('<script src="/home-badge.js" defer></script>', { html: true }); } })
+    .transform(res);
+}
