@@ -1,3 +1,14 @@
+---
+title: Agentic Zerodha
+emoji: 📈
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 8000
+pinned: false
+short_description: Zerodha portfolio dashboard with an AI copilot
+---
+
 # Agentic Zerodha
 
 An open-source web app for Zerodha investors: a portfolio dashboard with an AI copilot built in.
@@ -83,7 +94,41 @@ Only deployment settings; user keys are never configured on the server.
 POST requests must carry `X-Requested-With: fetch` (the page's own fetch calls do), so other sites can't use a
 visitor's cookie.
 
-## Deploying (example: techswitch.in/equity on Render)
+## Deploying (example: techswitch.in/equity on Hugging Face Spaces)
+
+```
+techswitch.in/*         → existing static site (unchanged)
+techswitch.in/equity/*  → Cloudflare Worker (deploy/) → Docker Space on Hugging Face
+```
+
+The block at the top of this README is the Space's config (Docker, port 8000). Free Spaces sleep only after
+48 hours without visits.
+
+1. **Create the Space:** [huggingface.co/new-space](https://huggingface.co/new-space) → name `agentic-zerodha`,
+   SDK **Docker** (blank template), hardware **CPU basic (free)**, visibility **Public**.
+2. **Space settings → Variables and secrets:**
+   - Variable `BASE_PATH` = `/equity`
+   - Variable `KITE_REDIRECT_URL` = `https://techswitch.in/equity/callback`
+   - Secret `SESSION_SECRET` = a long random value (`python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+3. **Push the code**, either:
+   - **Auto-sync from GitHub (recommended):** create a Hugging Face access token with *write* access, then in the
+     GitHub repo → Settings → Secrets and variables → Actions add secret `HF_TOKEN` and variable
+     `HF_SPACE` = `<your-hf-username>/agentic-zerodha`. Every push to `main` now deploys
+     (`.github/workflows/sync-to-hf.yml`); run it once from the Actions tab.
+   - **Or by hand:** `git push https://huggingface.co/spaces/<your-hf-username>/agentic-zerodha main`
+     (sign in with your HF username and the access token as the password).
+4. **Point the Worker at the Space:** set `ORIGIN_URL` in `deploy/wrangler.toml` to the Space's direct URL,
+   `https://<your-hf-username>-agentic-zerodha.hf.space` (shown under the Space's ⋮ menu → *Embed this Space*), then
+   from `deploy/` run `npx wrangler deploy`.
+5. Open `https://techswitch.in/equity/`.
+
+Use the app through `techswitch.in/equity/` or the direct `*.hf.space` URL, not the huggingface.co page: that page
+shows the app in an iframe, where browsers block its login cookie and Zerodha's login page.
+
+Without the Worker: leave `BASE_PATH` empty, set `KITE_REDIRECT_URL` to `https://<user>-agentic-zerodha.hf.space/callback`
+and use the `*.hf.space` URL directly.
+
+### On Render
 
 ```
 techswitch.in/*         → existing static site (unchanged)

@@ -13,9 +13,9 @@ COPY app ./app
 COPY static ./static
 COPY docker-entrypoint.py .
 
-# /data holds the cached Kite access token; mount a volume there to survive restarts.
+# Users' keys and Kite tokens live in their browser cookies, so nothing here needs to persist.
 RUN mkdir -p /data && useradd --create-home appuser
 
 EXPOSE 8000
-# Starts as root to chown the volume, then drops to appuser and runs a single uvicorn worker.
+# Runs a single uvicorn worker, as appuser when started as root (see docker-entrypoint.py).
 CMD ["python", "docker-entrypoint.py"]

@@ -21,7 +21,7 @@ export default {
     return withHomeBadge(res);
   },
 
-  // Cron trigger (see wrangler.toml): pings the origin so Render's free plan doesn't put it to sleep
+  // Cron trigger (see wrangler.toml): pings the origin so a free host (Hugging Face Spaces, Render) doesn't put it to sleep
   // (a cold start takes about a minute, and in-memory chat history is lost).
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(fetch(new URL("/healthz", env.ORIGIN_URL)));

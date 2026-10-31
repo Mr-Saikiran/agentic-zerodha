@@ -1,22 +1,21 @@
-"""Container entrypoint: take ownership of the data volume as root, then run uvicorn as `appuser`.
+"""Container entrypoint: runs a single uvicorn worker (chat history and research jobs live in memory).
 
-Volumes (e.g. on Fly.io) are mounted root-owned, so the unprivileged user can't write the cached
-Kite token without this. Runs a single worker: the Kite session, chat and research jobs live in memory.
+Started as root (Docker, Fly.io), it takes ownership of the data dir and drops to `appuser`.
+Started as a non-root user (Hugging Face Spaces runs containers as UID 1000), it just starts uvicorn.
 """
 
 import os
 import pwd
 
-data_dir = os.environ.get("DATA_DIR", "/data")
-user = pwd.getpwnam("appuser")
-
-os.makedirs(data_dir, exist_ok=True)
-os.chown(data_dir, user.pw_uid, user.pw_gid)
-
-os.setgroups([])
-os.setgid(user.pw_gid)
-os.setuid(user.pw_uid)
-os.environ["HOME"] = user.pw_dir
+if os.geteuid() == 0:
+    data_dir = os.environ.get("DATA_DIR", "/data")
+    user = pwd.getpwnam("appuser")
+    os.makedirs(data_dir, exist_ok=True)
+    os.chown(data_dir, user.pw_uid, user.pw_gid)
+    os.setgroups([])
+    os.setgid(user.pw_gid)
+    os.setuid(user.pw_uid)
+    os.environ["HOME"] = user.pw_dir
 
 os.execvp(
     "uvicorn",
