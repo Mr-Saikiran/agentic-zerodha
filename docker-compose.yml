@@ -3,6 +3,13 @@
 #   App + Cloudflare Tunnel (published on your domain):            docker compose --profile tunnel up -d --build
 # Settings come from .env (see .env.example): SESSION_SECRET, BASE_PATH, KITE_REDIRECT_URL, CLOUDFLARE_TUNNEL_TOKEN.
 
+# Keep container logs small so they can't fill the VM's disk over time.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   app:
     build: .
@@ -11,6 +18,13 @@ services:
     # Bound to localhost only; the tunnel (or your own reverse proxy) is what makes it public.
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging: *logging
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -20,4 +34,6 @@ services:
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+    logging: *logging

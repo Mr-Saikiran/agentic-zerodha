@@ -8,16 +8,15 @@ routes = [
   { pattern = "techswitch.in/equity/*", zone_name = "techswitch.in" },
 ]
 
-# Keep-awake ping: free Hugging Face Spaces sleep after 48 hours without traffic, so ping twice a day.
-# (On Render's free plan, which sleeps after 15 minutes, use "*/10 2-11 * * 1-5" for market hours.)
-# Remove it on a host that doesn't sleep.
+# Twice-daily ping of /healthz. Harmless on an always-on VM; it keeps free hosts that sleep awake
+# (Hugging Face Spaces: 48 h idle. On Render's free plan, which sleeps after 15 minutes, use "*/10 2-11 * * 1-5").
 [triggers]
 crons = ["0 */12 * * *"]
 
 [vars]
-# Public URL of the app container. For a Hugging Face Space it's the direct URL:
-# https://<hf-username>-<space-name>.hf.space (Space "..." menu -> "Embed this Space" shows it).
-ORIGIN_URL = "https://YOUR-HF-USERNAME-agentic-zerodha.hf.space"
+# Public URL of the app. With the Oracle VM + Cloudflare Tunnel (docs/ORACLE_CLOUD.md) it's the tunnel's
+# public hostname. Other hosts: https://agentic-zerodha.onrender.com, https://<hf-user>-agentic-zerodha.hf.space...
+ORIGIN_URL = "https://equity-origin.techswitch.in"
 
 # Optional origin lock: set the same value here and as ORIGIN_SECRET on the app with
 #   npx wrangler secret put ORIGIN_SECRET

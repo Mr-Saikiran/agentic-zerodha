@@ -155,6 +155,9 @@ and Kite logins survive that, because they're in the visitor's cookie; open chat
 
 No public IP, open ports or TLS certificates needed; the tunnel connects out to Cloudflare.
 
+**Free option: Oracle Cloud Always Free.** Step-by-step guide in [docs/ORACLE_CLOUD.md](docs/ORACLE_CLOUD.md); on a
+fresh Ubuntu VM, `deploy/oracle/setup.sh` does everything below in one command.
+
 1. Install Docker on the server (Linux: `curl -fsSL https://get.docker.com | sh`).
 2. Get the code and settings:
    ```bash
